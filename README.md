@@ -9,7 +9,7 @@ A custom PCB and firmware suite for indoor environmental monitoring, designed as
 
 ## Motivation
 
-A common failure mode in hobbyist environmental sensing is the "one-off breadboard" — a working prototype that never survives its own prototyping stage, because moving to a permanent installation requires redesigning the electrical, mechanical, and firmware layers simultaneously. This project treats those three layers as a single co-designed system, with the explicit goal of producing a base platform reusable across future projects rather than a single-purpose device.
+While quick and easy implementations of "one-off breadboard" working prototypes are able to quickly accomplish the task at hand, they often fail in the long term as they are not easy to expand upon and the use of the breadboard itself keeps the system a prototype instead of feeling like a complete product. This project aims to address this by creating custom hardware (PCB-level) to enable reconfigurability in functionality, with the explicit goal of producing a base platform reusable across future projects rather than a single-purpose device.
 
 The design started from a working breadboard prototype using an Arduino Nano 33 IoT and a DHT11 streaming to Arduino Cloud. Three constraints motivated the redesign: the DHT11's ±2°C accuracy and 1°C resolution required elaborate software compensation to detect HVAC state transitions; the free Arduino Cloud tier limited retention and dashboarding to the point that Adafruit IO became preferable; and the breadboard form factor precluded permanent installation. The resulting board addresses all three while adding a documented expansion path for the sensing modalities and display peripherals I intend to add later.
 
@@ -42,8 +42,7 @@ SmartHome-Monitor/
 
 ## Project tiers
 
-The firmware is organized as four progressive tiers, each a working codebase demonstrating a distinct level of hardware-software integration. This structure mirrors the pedagogical approach I intend to use as a TA — build the minimum viable version first, then add complexity only where it earns its keep.
-
+The firmware is organized as four progressive tiers, each a working codebase demonstrating a distinct level of hardware-software integration.
 ### Level 1 — Basic environmental monitor
 
 BME280 read over I2C, published to Adafruit IO at a fixed interval. Approximately 60 lines of code. This is the "does the hardware work end-to-end" checkpoint. See [`firmware/level1_basic_monitor/`](firmware/level1_basic_monitor/).
@@ -58,7 +57,7 @@ Extends Level 2 with a Qwiic sensor discovery routine, an ambient light channel 
 
 ### Level 4 — Spotify album-art display (future work)
 
-Reuses the same PCB with a WS2812B 22×22 matrix connected via the 3-pin JST connector. OAuth 2.0 flow against Spotify's Web API, JPEG decode, and downsample to 22×22. Documented as a roadmap because the OAuth and TLS overhead is substantially more implementation work than the sensing tiers. See [`firmware/level4_future_spotify_display/`](firmware/level4_future_spotify_display/).
+Reuses the same PCB with a WS2812B 16x16 matrix connected via the 3-pin JST connector. OAuth 2.0 flow against Spotify's Web API, JPEG decode, and downsample to LEX matrix resolution. Noted as a roadmap for future work because the OAuth and TLS overhead is substantially more implementation work than the sensing tiers. See [`firmware/level4_future_spotify_display/`](firmware/level4_future_spotify_display/).
 
 ## Hardware summary
 
@@ -95,4 +94,4 @@ MIT. See [`LICENSE`](LICENSE).
 
 ## Author
 
-Yash Patel. Firmware and hardware co-design as a portfolio artifact for a graduate teaching assistantship in undergraduate senior capstone design.
+Yash Patel. Firmware and hardware co-design.
