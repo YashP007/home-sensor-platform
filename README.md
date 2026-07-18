@@ -3,8 +3,8 @@
 A custom PCB and firmware suite for indoor environmental monitoring, designed as a general-purpose base platform that scales from a single temperature/humidity node to a multi-modal sensing hub with expansion pathways for actuation and display.
 
 <p align="center">
-  <img src="docs/images/pcb_render_top.png" width="380"/>
-  <img src="docs/images/pcb_render_bottom.png" width="380"/>
+  <img src="SmartHome-Monitor/docs/images/pcb_render_top.png" width="380"/>
+  <img src="SmartHome-Monitor/docs/images/pcb_render_bottom.png" width="380"/>
 </p>
 
 ## Motivation
