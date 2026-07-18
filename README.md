@@ -32,7 +32,7 @@ SmartHome-Monitor/
 │   ├── BOM.csv                     — bill of materials with sources
 │   ├── pcb_images/                 — top/bottom PCB renders
 │   └── enclosure/                  — STL files (WIP)
-├── hardware/
+├── manufacturing/
 │   ├── HomeTemp_PCB v12_2026-07-11.zip		— full PCB manufacturing files (copper, DRL, Silkscreen, etc)
 └── firmware/
     ├── secrets_example.h           — credential template
