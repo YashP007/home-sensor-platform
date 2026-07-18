@@ -1,0 +1,42 @@
+# Credentials — never commit
+firmware/**/secrets.h
+firmware/secrets.h
+*.key
+*.pem
+
+# Arduino IDE
+*.hex
+*.elf
+build/
+.build/
+
+# KiCad backups
+*-backups/
+*.bak
+*.kicad_pcb-bak
+*.kicad_sch-bak
+_autosave-*
+fp-info-cache
+
+# EAGLE backups
+*.b#*
+*.s#*
+*.l#*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python (for any future analysis scripts)
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
