@@ -32,6 +32,8 @@ SmartHome-Monitor/
 │   ├── BOM.csv                     — bill of materials with sources
 │   ├── pcb_images/                 — top/bottom PCB renders
 │   └── enclosure/                  — STL files (WIP)
+├── hardware/
+│   ├── HomeTemp_PCB v12_2026-07-11.zip		— full PCB manufacturing files (copper, DRL, Silkscreen, etc)
 └── firmware/
     ├── secrets_example.h           — credential template
     ├── level1_basic_monitor/       — BME280 → Adafruit IO
