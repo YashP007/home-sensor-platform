@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 """
-analyze_temperature.py — Apartment HVAC / thermal analysis from BME280 temperature logs.
+analyze_temperature.py
 
-Reads Adafruit IO CSV exports (id,value,feed_id,created_at,lat,lon,ele) produced by the
-SmartHome Monitor firmware, segments the record into 3AM-to-3AM local days, detects AC
-cycling events, quantifies cooling and recovery-heating slopes by time-of-day period, and
-estimates the apartment's thermal time constant (tau).
+Turns the BME280 temperature feed (exported from Adafruit IO as CSV) into an
+HVAC/thermal analysis: splits the record into 3AM-to-3AM "days" so a cooling
+run after midnight doesn't get chopped in half, finds AC cycling events,
+works out cooling/recovery slopes by time of day, and fits a thermal time
+constant (tau) for the apartment.
 
-Design goals
-------------
-* Self-reliant: auto-discovers input CSVs, needs only numpy/pandas/matplotlib.
-  No scipy, no API keys. Outdoor-weather cross-check is strictly optional and
-  degrades gracefully when the network is unavailable.
-* Idempotent + append-safe: outputs are stamped with the DATA's datetime range, not the
-  run time, so re-running on the same export overwrites the same files, and running on a
-  new export two weeks later produces a new, non-colliding set.
-* Multi-file: pass several CSVs (or let it glob the directory) and overlapping rows are
-  de-duplicated by Adafruit IO record id.
+Only needs numpy/pandas/matplotlib - no scipy, no API keys. The outdoor
+weather cross-check is optional and just skips itself if the network's down.
 
-Usage
------
+Outputs are named after the DATA's date range, not when you ran the script,
+so re-running on the same export just overwrites in place, and a new export
+two weeks later lands in its own files instead of clobbering the old ones.
+Pass multiple CSVs (or let it glob raw-data/) and overlapping rows get
+de-duped by Adafruit IO record id.
+
+Usage:
     python analyze_temperature.py                    # glob *.csv in raw-data/
     python analyze_temperature.py data1.csv data2.csv
     python analyze_temperature.py --outdir results --weather
@@ -59,7 +57,7 @@ print(f"[cfg]  Raw data directory: {RAW_DATA_DIR}")
 # ---- Configuration ----
 
 DEFAULT_CONFIG = {
-    # ── Locale / calendar ──────────────────────────────────────────────────────
+    # Locale / calendar
     "timezone": "America/New_York",   # CSV timestamps are UTC; all analysis is local
     "day_start_hour": 3,              # analysis "day" runs 03:00 -> 03:00 next day
 
@@ -71,16 +69,16 @@ DEFAULT_CONFIG = {
         "evening":   [18, 22],        # 6PM  - 10PM
     },
 
-    # ── Resampling / smoothing ────────────────────────────────────────────────
+    # Resampling / smoothing
     "grid_seconds": 30,               # uniform resample grid (matches publish interval)
     "max_interp_gap_min": 5.0,        # gaps longer than this stay NaN (no fake data)
     "median_filter_samples": 3,       # spike-robust pre-filter
     "smooth_window_min": 1.5,         # rolling-mean smoothing window
 
-    # ── Slope estimation ──────────────────────────────────────────────────────
+    # Slope estimation
     "slope_window_min": 2.5,          # centered least-squares window for dT/dt
 
-    # ── AC event detection (all rates in degF/min) ────────────────────────────
+    # AC event detection (all rates in degF/min)
     "cool_slope_on": 0.15,            # slope < -this  => actively cooling
     "merge_gap_min": 1.5,             # merge cooling runs separated by less than this
     "min_cool_duration_min": 1.5,     # reject runs shorter than this
@@ -92,7 +90,7 @@ DEFAULT_CONFIG = {
     # meaning anything. Events whose recovery hits the cap are flagged.
     "max_recovery_min": 60.0,
 
-    # ── Transient / artifact rejection ────────────────────────────────────────
+    # Transient / artifact rejection
     # A local disturbance (door, sun, body heat, sensor bump) looks like a sharp
     # spike that decays straight back to where it started. A compressor cycle
     # also starts from a fast-rising recovery leg, so rise rate ALONE cannot
@@ -104,7 +102,7 @@ DEFAULT_CONFIG = {
     "artifact_baseline_min": 5.0,      # baseline window before the rise
     "artifact_min_net_below_f": 0.75,  # trough must beat baseline by this much
 
-    # ── Thermal time constant ─────────────────────────────────────────────────
+    # Thermal time constant
     "tau_min_segment_min": 45.0,      # minimum passive (AC-off) segment length to fit
     "tau_min_rise_f": 1.0,            # segment must drift at least this much
     "tau_min_r2": 0.50,               # reject poor fits
@@ -117,18 +115,18 @@ DEFAULT_CONFIG = {
     # Identifiability: over a window of length L a first-order response closes
     # (1 - e^{-L/tau}) of its gap. If that fraction is small the exponential is
     # indistinguishable from a straight line, tau runs off to infinity and T_inf
-    # becomes meaningless — even though R^2 looks excellent. Reject those.
+    # becomes meaningless - even though R^2 looks excellent. Reject those.
     "tau_min_gap_closed_frac": 0.35,  # segment must span >= ~0.43 tau
     "tau_min_curve_r2": 0.90,
 
-    # ── Setpoint-raise detection (the long afternoon warm-up) ─────────────────
+    # Setpoint-raise detection (the long afternoon warm-up)
     "setpoint_raise_min_duration_min": 90.0,
     "setpoint_raise_min_rise_f": 4.0,
 
-    # ── Partial-day handling ──────────────────────────────────────────────────
+    # Partial-day handling
     "full_day_coverage_pct": 90.0,    # below this a day is flagged PARTIAL
 
-    # ── Optional outdoor weather cross-check ──────────────────────────────────
+    # Optional outdoor weather cross-check
     "weather_enabled": False,
     "latitude": 42.3505,              # Boston, MA (Boston University area)
     "longitude": -71.1054,
@@ -181,7 +179,7 @@ def load_data(paths: list[str], tz: str) -> pd.DataFrame:
         df = pd.read_csv(p)
         missing = REQUIRED_COLS - set(df.columns)
         if missing:
-            print(f"[load] SKIP {os.path.basename(p)} — missing columns {sorted(missing)}")
+            print(f"[load] SKIP {os.path.basename(p)} - missing columns {sorted(missing)}")
             continue
         df["_src"] = os.path.basename(p)
         frames.append(df)
@@ -313,8 +311,8 @@ def add_period(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 class ACEvent:
     analysis_day: str
     period: str
-    start: pd.Timestamp          # local peak — compressor start
-    trough: pd.Timestamp         # local minimum — compressor stop
+    start: pd.Timestamp          # local peak - compressor start
+    trough: pd.Timestamp         # local minimum - compressor stop
     recovery_end: pd.Timestamp   # next compressor start (or end of passive window)
     t_start_f: float
     t_trough_f: float
@@ -402,9 +400,9 @@ def detect_events(day: pd.DataFrame, cfg: dict, day_label: str) -> list[ACEvent]
     knee_eps = 0.01
 
     for s, e in merged:
-        # ── Refine the START to the "knee": the point where the trace stops
+        # Refine the START to the "knee": the point where the trace stops
         # drifting and the compressor visibly grabs it. Taking a plain argmax
-        # over a lookback window is wrong here — during the afternoon coast the
+        # over a lookback window is wrong here - during the afternoon coast the
         # trace is already gently falling, so the window maximum sits at its far
         # edge and the fitted cooling rate comes out biased shallow.
         lo = max(0, s - search)
@@ -421,7 +419,7 @@ def detect_events(day: pd.DataFrame, cfg: dict, day_label: str) -> list[ACEvent]
                 break
             i_peak -= 1
 
-        # ── Refine the END to the nearest local minimum (well-defined: the
+        # Refine the END to the nearest local minimum (well-defined: the
         # recovery leg turns the trace around sharply).
         hi = min(n - 1, e + search)
         i_trough = e
@@ -438,7 +436,7 @@ def detect_events(day: pd.DataFrame, cfg: dict, day_label: str) -> list[ACEvent]
 
         b_c, _, r2_c = _ols(tmin[i_peak:i_trough + 1], T[i_peak:i_trough + 1])
 
-        # ── Transient / artifact test ───────────────────────────────────────
+        # Transient / artifact test
         # (a) was the room warming implausibly fast just before the peak, and
         # (b) did the cooling fail to leave it below its pre-event baseline?
         # Both must hold. Condition (a) alone would also reject genuine cycles
@@ -471,7 +469,7 @@ def detect_events(day: pd.DataFrame, cfg: dict, day_label: str) -> list[ACEvent]
         elif is_art:
             reason = (f"spike of {pre_rise:+.2f} °F/min then returned to baseline "
                       f"(trough only {net_below:+.2f} °F below the pre-event "
-                      f"{baseline:.2f} °F) — local disturbance, not a compressor cycle")
+                      f"{baseline:.2f} °F) - local disturbance, not a compressor cycle")
         else:
             reason = ""
 
@@ -525,7 +523,7 @@ def detect_events(day: pd.DataFrame, cfg: dict, day_label: str) -> list[ACEvent]
 # ---- Setpoint-raise detection (the long afternoon coast to ~86F) ----
 
 def detect_setpoint_raise(day: pd.DataFrame, events: list[ACEvent], cfg: dict):
-    """Find the longest AC-free warming stretch — the window where the thermostat was
+    """Find the longest AC-free warming stretch - the window where the thermostat was
     parked near 86F and the apartment simply coasted upward."""
     real = [e for e in events if not e.is_artifact]
     ts = day["ts"]
@@ -567,7 +565,7 @@ def detect_setpoint_raise(day: pd.DataFrame, events: list[ACEvent], cfg: dict):
 #       dT/dt = a + b*T,      b = -1/tau,      T_inf = -a/b
 #
 # This recovers BOTH the time constant and the effective driving (asymptote)
-# temperature from indoor data alone — no outdoor sensor, no nonlinear solver,
+# temperature from indoor data alone - no outdoor sensor, no nonlinear solver,
 # no scipy. tau is the e-folding time: the apartment closes ~63% of the gap to
 # T_inf in one tau.
 #
@@ -600,7 +598,7 @@ def passive_segments(day: pd.DataFrame, events: list[ACEvent], cfg: dict):
     trim = pd.Timedelta(minutes=cfg["tau_edge_trim_min"])
     for e in real:
         busy |= (ts >= e.start - trim) & (ts <= e.trough + trim)
-    # Artifacts are local disturbances — exclude their neighbourhood too.
+    # Artifacts are local disturbances - exclude their neighbourhood too.
     for e in events:
         if e.is_artifact:
             busy |= (ts >= e.start - trim) & (ts <= e.trough + trim)
@@ -691,7 +689,7 @@ def fit_tau_indoor(day: pd.DataFrame, segs, cfg: dict, day_label: str) -> list[T
         tmin = (sub["ts"] - sub["ts"].iloc[0]).dt.total_seconds().to_numpy() / 60.0
         T = sub["temp_smooth"].to_numpy(dtype=float)
 
-        # ── Primary: fit the temperature curve itself ────────────────────────
+        # Primary: fit the temperature curve itself
         tau_h, t_inf, t0, r2 = _curve_fit_tau(tmin, T)
         if np.isfinite(tau_h):
             frac = 1.0 - math.exp(-(dur / 60.0) / tau_h) if tau_h > 0 else np.nan
@@ -700,18 +698,18 @@ def fit_tau_indoor(day: pd.DataFrame, segs, cfg: dict, day_label: str) -> list[T
             if frac < cfg["tau_min_gap_closed_frac"]:
                 ok = False
                 notes.append(
-                    f"REJECTED — segment only closes {frac*100:.0f}% of the gap "
+                    f"REJECTED - segment only closes {frac*100:.0f}% of the gap "
                     f"(τ={tau_h:.1f} h ≫ {dur/60:.1f} h window); the response is still "
                     f"linear here so τ and T∞ are not separately identifiable")
             if r2 < cfg["tau_min_curve_r2"]:
                 ok = False
-                notes.append(f"REJECTED — R²={r2:.3f} below {cfg['tau_min_curve_r2']:.2f}")
+                notes.append(f"REJECTED - R²={r2:.3f} below {cfg['tau_min_curve_r2']:.2f}")
             if not (0.05 <= tau_h <= 48):
                 ok = False
-                notes.append("REJECTED — τ outside plausible 0.05–48 h range")
+                notes.append("REJECTED - τ outside plausible 0.05–48 h range")
             if ok and abs(t0 - T[np.isfinite(T)][0]) > 1.5:
                 notes.append(
-                    f"fitted T0={t0:.1f} vs measured {T[np.isfinite(T)][0]:.1f} °F — "
+                    f"fitted T0={t0:.1f} vs measured {T[np.isfinite(T)][0]:.1f} °F - "
                     "fast initial transient (air vs thermal mass: 2-pole behaviour)")
             out.append(TauFit(
                 method=METHOD_CURVE, analysis_day=day_label, label=label,
@@ -720,7 +718,7 @@ def fit_tau_indoor(day: pd.DataFrame, segs, cfg: dict, day_label: str) -> list[T
                 start=sub["ts"].iloc[0], end=sub["ts"].iloc[-1],
                 gap_closed_frac=float(frac), accepted=ok, note="; ".join(notes)))
 
-        # ── Secondary: Newton-cooling rate regression (independent check) ────
+        # Secondary: Newton-cooling rate regression (independent check)
         b, a, r2r = _ols(T, rate_wide[s:e + 1])
         if np.isfinite(b) and b < 0:
             tau_r = (-1.0 / b) / 60.0
@@ -728,8 +726,8 @@ def fit_tau_indoor(day: pd.DataFrame, segs, cfg: dict, day_label: str) -> list[T
             ok = (r2r >= cfg["tau_min_r2"] and 0.05 <= tau_r <= 48
                   and frac_r >= cfg["tau_min_gap_closed_frac"])
             note = "" if ok else (
-                "REJECTED — low R² (derivative noise dominates)" if r2r < cfg["tau_min_r2"]
-                else "REJECTED — τ not identifiable over this window")
+                "REJECTED - low R² (derivative noise dominates)" if r2r < cfg["tau_min_r2"]
+                else "REJECTED - τ not identifiable over this window")
             out.append(TauFit(
                 method=METHOD_RATE, analysis_day=day_label, label=label,
                 tau_hours=float(tau_r), t_inf_f=float(-a / b),
@@ -809,7 +807,7 @@ def fetch_outdoor(df: pd.DataFrame, cfg: dict) -> pd.Series | None:
                     return s
             except Exception:
                 continue
-        print("[wx]   Outdoor temperature unavailable — indoor-only tau reported.")
+        print("[wx]   Outdoor temperature unavailable - indoor-only tau reported.")
     except Exception as exc:
         print(f"[wx]   Weather lookup skipped ({exc}).")
     return None
@@ -857,7 +855,7 @@ def plot_full_timeseries(df, all_events, cfg, path):
         ax.text(bnd, ax.get_ylim()[1], f" day start {h:02d}:00", fontsize=8,
                 va="top", rotation=90, alpha=0.7)
     ax.set_ylabel("Temperature (°F)")
-    ax.set_title("Full record — shaded bands are detected AC cooling events "
+    ax.set_title("Full record - shaded bands are detected AC cooling events "
                  "(grey = rejected transient)")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d\n%H:%M", tz=df["ts"].dt.tz))
     ax.grid(alpha=0.25)
@@ -944,7 +942,7 @@ def plot_day_diagnostic(day, events, setpoint, taufits, cfg, day_label, path):
 
     ax.set_ylabel("Temperature (°F)")
     n_real = sum(1 for e in events if not e.is_artifact)
-    ax.set_title(f"Analysis day {day_label} (03:00→03:00 local) — "
+    ax.set_title(f"Analysis day {day_label} (03:00→03:00 local) - "
                  f"{n_real} AC events detected")
 
     ax2.plot(day["ts"], day["slope_f_per_min"], lw=0.9, color="#34495e")
@@ -998,7 +996,7 @@ def plot_cycle_detail(day, events, cfg, day_label, path):
                 arrowprops=dict(arrowstyle="<->", color="#555"))
     ax.text(ev.start, (ev.t_start_f + ev.t_trough_f) / 2, f"  Δ {ev.cool_drop_f:.2f} °F",
             fontsize=9, va="center")
-    ax.set_title(f"{day_label} — anatomy of the deepest AC cycle "
+    ax.set_title(f"{day_label} - anatomy of the deepest AC cycle "
                  f"({ev.period}, {ev.start:%H:%M})")
     ax.set_ylabel("Temperature (°F)")
     ax.set_xlabel("local time")
@@ -1027,7 +1025,13 @@ def plot_period_slopes(events_df, cfg, path):
     ]:
         data = [real.loc[real["period"] == p, col].dropna().to_numpy() for p in order]
         data = [d for d in data]
-        bp = ax.boxplot(data, labels=order, patch_artist=True, widths=0.55)
+        # Not passing labels/tick_labels here on purpose - matplotlib renamed
+        # this kwarg (labels -> tick_labels) around 3.9 and older/newer
+        # installs disagree on which name works. Setting ticks by hand after
+        # the fact avoids caring which matplotlib version is on the machine.
+        bp = ax.boxplot(data, patch_artist=True, widths=0.55)
+        ax.set_xticks(range(1, len(order) + 1))
+        ax.set_xticklabels(order)
         for b in bp["boxes"]:
             b.set(facecolor=color, alpha=0.35)
         for i, d in enumerate(data, 1):
@@ -1089,11 +1093,11 @@ def plot_tau(day, segs, fits, cfg, day_label, path):
                     fontsize=8, rotation=90, va="bottom", color="#7f8c8d")
         ax.set_xlabel("hours into passive segment")
         ax.set_ylabel("Temperature (°F)")
-        ax.set_title(f"{day_label} — {f.label}\n{f.start:%H:%M}–{f.end:%H:%M} "
+        ax.set_title(f"{day_label} - {f.label}\n{f.start:%H:%M}–{f.end:%H:%M} "
                      f"({dur/60:.1f} h, {rise:+.1f} °F)",
                      color="black" if f.accepted else "#909497")
         if not f.accepted:
-            ax.text(0.5, 0.5, "NOT IDENTIFIABLE\nτ ≫ window — excluded",
+            ax.text(0.5, 0.5, "NOT IDENTIFIABLE\nτ ≫ window - excluded",
                     transform=ax.transAxes, ha="center", va="center", fontsize=13,
                     color="#c0392b", alpha=0.35, weight="bold", rotation=18)
             for sp in ax.spines.values():
@@ -1102,7 +1106,7 @@ def plot_tau(day, segs, fits, cfg, day_label, path):
         ax.legend(fontsize=9)
         ax.grid(alpha=0.25)
 
-        # Bottom: goodness of fit — residuals plus the tau sensitivity curve.
+        # Bottom: goodness of fit - residuals plus the tau sensitivity curve.
         ax = axes[1][j]
         resid = T - model
         ax.plot(tmin / 60.0, resid, lw=1.0, color="#34495e")
@@ -1111,7 +1115,7 @@ def plot_tau(day, segs, fits, cfg, day_label, path):
         rms = float(np.sqrt(np.nanmean(resid ** 2)))
         ax.set_xlabel("hours into passive segment")
         ax.set_ylabel("residual (°F)")
-        ax.set_title(f"Fit residuals — RMS {rms:.3f} °F, R²={f.r2:.4f}, "
+        ax.set_title(f"Fit residuals - RMS {rms:.3f} °F, R²={f.r2:.4f}, "
                      f"gap closed {f.gap_closed_frac*100:.0f}%")
         mate = next((x for x in fits if x.method == METHOD_RATE
                      and x.label == f.label), None)
@@ -1208,7 +1212,7 @@ def main(argv=None):
     df = assign_days(df, cfg)
     df = add_period(df, cfg)
 
-    # ── Output layout, stamped from the DATA's datetime range ────────────────
+    # Output layout, stamped from the DATA's datetime range
     stamp = (f"{raw['ts'].iloc[0]:%Y%m%d-%H%M}_to_{raw['ts'].iloc[-1]:%Y%m%d-%H%M}")
     out_root = args.outdir
     d_rep = os.path.join(out_root, "reports")
@@ -1218,7 +1222,7 @@ def main(argv=None):
 
     outdoor = fetch_outdoor(raw, cfg)
 
-    # ── Per-day analysis ─────────────────────────────────────────────────────
+    # Per-day analysis
     all_events: list[ACEvent] = []
     coverage: dict = {}
     tau_rows: list[TauFit] = []
@@ -1298,14 +1302,14 @@ def main(argv=None):
 
     sp_df = pd.DataFrame(setpoints)
 
-    # ── Plots that span all days ─────────────────────────────────────────────
+    # Plots that span all days
     if not args.no_plots:
         plot_full_timeseries(df, all_events, cfg, os.path.join(d_plt, "raw_full_record.png"))
         plot_days_overlaid(df, cfg, os.path.join(d_plt, "days_overlaid.png"))
         if not events_df.empty:
             plot_period_slopes(events_df, cfg, os.path.join(d_plt, "period_slope_summary.png"))
 
-    # ── CSV exports ──────────────────────────────────────────────────────────
+    # CSV exports
     written = []
     for name, frame in [("daily_summary", day_df), ("ac_events", events_df),
                         ("period_stats", period_df), ("thermal_tau", tau_df),
@@ -1314,7 +1318,7 @@ def main(argv=None):
         frame.to_csv(p, index=False)
         written.append(p)
 
-    # ── Terminal report ──────────────────────────────────────────────────────
+    # Terminal report
     L: list[str] = []
     A = L.append
     bar = "═" * 88
@@ -1381,7 +1385,7 @@ def main(argv=None):
             A(f"  These cycles end less than {cfg['artifact_min_net_below_f']:.2f} °F below")
             A("  their own pre-event baseline. That is what you expect from short")
             A("  near-setpoint cycling late in the evening, but it is also what a local")
-            A("  disturbance looks like — this data alone cannot separate the two.")
+            A("  disturbance looks like - this data alone cannot separate the two.")
             A("")
             for _, r in low.iterrows():
                 A(f"     {r['start']:%Y-%m-%d %H:%M}  {r['period']:<10} "
@@ -1402,7 +1406,7 @@ def main(argv=None):
 
     if not sp_df.empty:
         A("─" * 88)
-        A("  SETPOINT-RAISE COAST  (longest AC-free warming stretch — the ~86 °F window)")
+        A("  SETPOINT-RAISE COAST  (longest AC-free warming stretch - the ~86 °F window)")
         A("─" * 88)
         for _, r in sp_df.iterrows():
             A(f"     {r['analysis_day']}:  {r['start']:%H:%M} → {r['end']:%H:%M}  "
@@ -1459,7 +1463,7 @@ def main(argv=None):
             A(f"       apartment at ~{75 + (tinf-75)*0.632:.0f} °F after {tw:.1f} h and "
               f"~{75 + (tinf-75)*0.865:.0f} °F after {2*tw:.1f} h.")
             A(f"       Recovery cost: reaching 75 °F again from {tinf:.0f} °F is roughly")
-            A(f"       the integral the compressor has to remove — this is why the")
+            A(f"       the integral the compressor has to remove - this is why the")
             A(f"       afternoon setback is only a net saving if the coast is long")
             A(f"       relative to τ.")
     A("")
