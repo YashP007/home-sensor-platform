@@ -3,8 +3,8 @@
 A custom PCB and firmware suite for indoor environmental monitoring, designed as a general-purpose base platform that scales from a single temperature/humidity node to a multi-modal sensing hub with expansion pathways for actuation and display.
 
 <p align="center">
-  <img src="SmartHome-Monitor/docs/images/pcb_render_top.png" width="380"/>
-  <img src="SmartHome-Monitor/docs/images/pcb_render_bottom.png" width="380"/>
+  <img src="docs/images/pcb_render_top.png" width="380"/>
+  <img src="docs/images/pcb_render_bottom.png" width="380"/>
 </p>
 
 ## Motivation
@@ -32,7 +32,7 @@ SmartHome-Monitor/
 │   ├── BOM.csv                     — bill of materials with sources
 │   ├── pcb_images/                 — top/bottom PCB renders
 │   └── enclosure/                  — STL files (WIP)
-├── hardware/
+├── manufacturing/
 │   ├── HomeTemp_PCB v12_2026-07-11.zip		— full PCB manufacturing files (copper, DRL, Silkscreen, etc)
 └── firmware/
     ├── secrets_example.h           — credential template
