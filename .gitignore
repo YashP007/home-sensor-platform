@@ -7,8 +7,8 @@ firmware/**/tokens.json
 *.pem
 
 # Data files and plot outputs
-collected-data\raw-data
-collected-data\analysis_output
+collected-data/raw-data/
+collected-data/analysis_output/
 
 secrets.env
 tokens.json
