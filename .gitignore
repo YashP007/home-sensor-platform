@@ -1,8 +1,17 @@
 # Credentials — never commit
 firmware/**/secrets.h
 firmware/secrets.h
+firmware/**/secrets.env
+firmware/**/tokens.json
 *.key
 *.pem
+
+# Data files and plot outputs
+collected-data\raw-data
+collected-data\analysis_output
+
+secrets.env
+tokens.json
 
 # Arduino IDE
 *.hex
