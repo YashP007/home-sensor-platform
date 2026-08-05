@@ -126,11 +126,13 @@ DEFAULT_CONFIG = {
     # Partial-day handling
     "full_day_coverage_pct": 90.0,    # below this a day is flagged PARTIAL
 
-    # Optional outdoor weather cross-check
+    # Optional outdoor weather cross-check (Open-Meteo, no API key needed).
+    # Pulls 15-min data where it's available (US/Central Europe), otherwise
+    # hourly. See fetch_outdoor() for the fallback chain.
     "weather_enabled": False,
     "latitude": 42.3505,              # Boston, MA (Boston University area)
     "longitude": -71.1054,
-    "weather_timeout_s": 15,
+    "weather_timeout_s": 15,          # per request; up to 3 requests may be tried
 }
 
 
@@ -738,14 +740,14 @@ def fit_tau_indoor(day: pd.DataFrame, segs, cfg: dict, day_label: str) -> list[T
     return out
 
 
-def fit_tau_weather(day: pd.DataFrame, segs, outdoor: pd.Series | None,
+def fit_tau_weather(day: pd.DataFrame, segs, outdoor: "OutdoorData | None",
                     cfg: dict, day_label: str) -> list[TauFit]:
-    if outdoor is None or outdoor.empty:
+    if outdoor is None or outdoor.series.empty:
         return []
     out = []
     for k, (s, e, dur, rise) in enumerate(segs, 1):
         sub = day.iloc[s:e + 1].copy()
-        tout = outdoor.reindex(outdoor.index.union(sub["ts"])).interpolate(
+        tout = outdoor.series.reindex(outdoor.series.index.union(sub["ts"])).interpolate(
             method="time").reindex(sub["ts"])
         drive = tout.to_numpy(dtype=float) - sub["temp_smooth"].to_numpy(dtype=float)
         dTdt = sub["slope_f_per_min"].to_numpy(dtype=float)
@@ -766,8 +768,28 @@ def fit_tau_weather(day: pd.DataFrame, segs, outdoor: pd.Series | None,
     return out
 
 
-def fetch_outdoor(df: pd.DataFrame, cfg: dict) -> pd.Series | None:
-    """Optional Open-Meteo hourly outdoor temperature. Fails soft, always."""
+@dataclass
+class OutdoorData:
+    series: pd.Series       # tz-aware index (local time), °F
+    resolution_min: int     # 15 or 60 - whatever we actually managed to get
+    source: str              # human-readable, goes in the report/plots
+
+
+def fetch_outdoor(df: pd.DataFrame, cfg: dict) -> OutdoorData | None:
+    """
+    Optional Open-Meteo outdoor temperature, at the best resolution we can get.
+
+    Tries three things in order and uses whichever answers first:
+      1. Forecast API, minutely_15 - real 15-minute data over North America
+         (HRRR) and Central Europe (ICON-D2/AROME); interpolated from hourly
+         elsewhere, which is still finer than nothing.
+      2. Forecast API, hourly - covers the last ~92 days.
+      3. Archive API, hourly - reanalysis data, for anything older than that.
+    Each candidate is wrapped in its own try/except, so a slow or malformed
+    response just falls through to the next one. If all three come up empty
+    the weather cross-check is skipped entirely and the rest of the script
+    runs exactly as if --weather had never been passed.
+    """
     if not cfg.get("weather_enabled"):
         return None
     try:
@@ -776,41 +798,86 @@ def fetch_outdoor(df: pd.DataFrame, cfg: dict) -> pd.Series | None:
         tz = cfg["timezone"]
         d0 = df["ts"].iloc[0].date()
         d1 = df["ts"].iloc[-1].date()
+        span_days = (pd.Timestamp(d1) - pd.Timestamp(d0)).days + 2
         base_q = {
             "latitude": cfg["latitude"], "longitude": cfg["longitude"],
-            "hourly": "temperature_2m", "temperature_unit": "fahrenheit",
-            "timezone": tz,
+            "temperature_unit": "fahrenheit", "timezone": tz,
         }
-        span_days = (pd.Timestamp(d1) - pd.Timestamp(d0)).days + 2
-        urls = [
-            # Recent data lives on the forecast endpoint (archive lags ~5 days).
-            "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(
-                {**base_q, "past_days": min(92, max(2, span_days)), "forecast_days": 1}),
-            "https://archive-api.open-meteo.com/v1/archive?" + urllib.parse.urlencode(
-                {**base_q, "start_date": str(d0), "end_date": str(d1)}),
+        past_hourly = min(92, max(2, span_days))
+        # Keep the 15-minutely request small (capped at ~7 days of steps) - a
+        # multi-week ask at this resolution is a lot of points for not much
+        # extra accuracy, and there's no documented ceiling on the API side
+        # worth poking at. Longer records just fall back to hourly below.
+        past_15 = min(7, max(1, span_days))
+
+        candidates = [
+            ("https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(
+                {**base_q, "minutely_15": "temperature_2m",
+                 "past_minutely_15": past_15 * 96, "forecast_minutely_15": 96}),
+             "minutely_15", 15, "Open-Meteo forecast, 15-min"),
+            ("https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(
+                {**base_q, "hourly": "temperature_2m",
+                 "past_days": past_hourly, "forecast_days": 1}),
+             "hourly", 60, "Open-Meteo forecast, hourly"),
+            ("https://archive-api.open-meteo.com/v1/archive?" + urllib.parse.urlencode(
+                {**base_q, "hourly": "temperature_2m",
+                 "start_date": str(d0), "end_date": str(d1)}),
+             "hourly", 60, "Open-Meteo archive, hourly"),
         ]
-        for url in urls:
+
+        for url, resp_key, res_min, source in candidates:
             try:
                 with urllib.request.urlopen(url, timeout=cfg["weather_timeout_s"]) as r:
                     payload = json.loads(r.read().decode())
-                h = payload.get("hourly") or {}
-                times, temps = h.get("time"), h.get("temperature_2m")
+                block = payload.get(resp_key) or {}
+                times, temps = block.get("time"), block.get("temperature_2m")
                 if not times or not temps:
                     continue
                 s = pd.Series(temps, index=pd.to_datetime(times).tz_localize(tz),
                               dtype="float64").dropna()
                 s = s[(s.index >= df["ts"].iloc[0] - pd.Timedelta(hours=2)) &
                       (s.index <= df["ts"].iloc[-1] + pd.Timedelta(hours=2))]
-                if len(s) >= 3:
-                    print(f"[wx]   Outdoor temperature: {len(s)} hourly points "
-                          f"({s.min():.1f}-{s.max():.1f} F)")
-                    return s
+                if len(s) < 3:
+                    continue
+                print(f"[wx]   Outdoor temperature: {len(s)} points at "
+                      f"{res_min}-min resolution ({source}), "
+                      f"{s.min():.1f}-{s.max():.1f} F")
+                if s.index.min() > df["ts"].iloc[0] + pd.Timedelta(minutes=res_min * 2):
+                    print(f"[wx]   note: outdoor data starts {s.index.min():%m-%d %H:%M}, "
+                          "after the indoor record - the early part of the plot "
+                          "will show a gap in the outdoor trace.")
+                return OutdoorData(series=s, resolution_min=res_min, source=source)
             except Exception:
                 continue
         print("[wx]   Outdoor temperature unavailable - indoor-only tau reported.")
     except Exception as exc:
         print(f"[wx]   Weather lookup skipped ({exc}).")
     return None
+
+
+def merge_outdoor(df: pd.DataFrame, outdoor: OutdoorData | None) -> pd.DataFrame:
+    """
+    Interpolate the outdoor series onto our uniform indoor grid as "outdoor_f".
+
+    Time-based interpolation, so this works the same way whether the source
+    is 15-minutely or hourly - denser source data just means less to
+    interpolate over. We don't extrapolate past the ends of the outdoor
+    record; anything outside it is left NaN rather than guessed at.
+    """
+    if outdoor is None or outdoor.series.empty:
+        return df
+    s = outdoor.series
+    grid = df["ts"]
+    combined = s.reindex(s.index.union(grid)).interpolate(method="time").reindex(grid)
+    # copy=True: to_numpy() can hand back a read-only view straight into the
+    # Series' internal buffer when no cast is actually needed, and we're
+    # about to write into this array.
+    out = combined.to_numpy(dtype=float, copy=True)
+    out_of_range = (grid < s.index.min()) | (grid > s.index.max())
+    out[out_of_range.to_numpy()] = np.nan
+    df = df.copy()
+    df["outdoor_f"] = out
+    return df
 
 
 # ---- Plotting ----
@@ -845,6 +912,9 @@ def plot_full_timeseries(df, all_events, cfg, path):
     fig, ax = plt.subplots(figsize=(16, 5.5))
     ax.plot(df["ts"], df["temp_f"], lw=0.6, color="#b0b7c3", label="raw (published EMA)")
     ax.plot(df["ts"], df["temp_smooth"], lw=1.2, color="#1f4e79", label="smoothed")
+    if "outdoor_f" in df.columns and df["outdoor_f"].notna().any():
+        ax.plot(df["ts"], df["outdoor_f"], lw=1.0, color="#16a085", ls="--",
+                label="outdoor (Open-Meteo)")
     for ev in all_events:
         c = "#c0392b" if not ev.is_artifact else "#999999"
         ax.axvspan(ev.start, ev.trough, color=c, alpha=0.30 if not ev.is_artifact else 0.18, lw=0)
@@ -906,6 +976,9 @@ def plot_day_diagnostic(day, events, setpoint, taufits, cfg, day_label, path):
     ax, ax2 = axes
     ax.plot(day["ts"], day["temp_f"], lw=0.6, color="#c8ccd4", label="raw")
     ax.plot(day["ts"], day["temp_smooth"], lw=1.3, color="#1f4e79", label="smoothed")
+    have_outdoor = "outdoor_f" in day.columns and day["outdoor_f"].notna().any()
+    if have_outdoor:
+        ax.plot(day["ts"], day["outdoor_f"], lw=1.1, color="#16a085", ls="--", label="outdoor")
 
     for ev in events:
         if ev.is_artifact:
@@ -933,12 +1006,16 @@ def plot_day_diagnostic(day, events, setpoint, taufits, cfg, day_label, path):
                     bbox=dict(fc="#fef9e7", ec="#f1c40f", alpha=0.95))
 
     from matplotlib.lines import Line2D
-    ax.legend(handles=[
+    legend_handles = [
         Line2D([], [], color="#1f4e79", lw=1.3, label="smoothed temperature"),
         Line2D([], [], color="#c0392b", lw=2.0, label="fitted cooling slope (AC on)"),
         Line2D([], [], color="#e67e22", lw=2.0, label="fitted heating slope (recovery)"),
         Line2D([], [], color="#9e9e9e", lw=6, alpha=.4, label="rejected transient"),
-    ], fontsize=9, loc="upper left")
+    ]
+    if have_outdoor:
+        legend_handles.append(
+            Line2D([], [], color="#16a085", lw=1.1, ls="--", label="outdoor (Open-Meteo)"))
+    ax.legend(handles=legend_handles, fontsize=9, loc="upper left")
 
     ax.set_ylabel("Temperature (°F)")
     n_real = sum(1 for e in events if not e.is_artifact)
@@ -1221,6 +1298,7 @@ def main(argv=None):
         os.makedirs(d, exist_ok=True)
 
     outdoor = fetch_outdoor(raw, cfg)
+    df = merge_outdoor(df, outdoor)
 
     # Per-day analysis
     all_events: list[ACEvent] = []
@@ -1243,6 +1321,15 @@ def main(argv=None):
             "t_mean": float(day["temp_f"].mean()),
             "t_range": float(day["temp_f"].max() - day["temp_f"].min()),
         }
+        if "outdoor_f" in day.columns and day["outdoor_f"].notna().any():
+            coverage[label].update({
+                "outdoor_mean_f": float(day["outdoor_f"].mean()),
+                "outdoor_min_f": float(day["outdoor_f"].min()),
+                "outdoor_max_f": float(day["outdoor_f"].max()),
+                # Positive = indoors running warmer than outdoors (typical at
+                # night once the AC has coasted off for a while).
+                "indoor_outdoor_delta_f": float((day["temp_smooth"] - day["outdoor_f"]).mean()),
+            })
 
         events = detect_events(day, cfg, label)
         all_events.extend(events)
@@ -1335,21 +1422,31 @@ def main(argv=None):
     A(f"  Timezone             : {cfg['timezone']}   (analysis day "
       f"{cfg['day_start_hour']:02d}:00 → {cfg['day_start_hour']:02d}:00)")
     A(f"  Temperature range    : {raw['temp_f'].min():.2f} – {raw['temp_f'].max():.2f} °F")
+    if outdoor is not None:
+        A(f"  Outdoor data source  : {outdoor.source}, "
+          f"{outdoor.series.min():.1f}–{outdoor.series.max():.1f} °F over the record")
     A("")
 
     A("─" * 88)
     A("  PER-DAY OVERVIEW")
     A("─" * 88)
+    have_outdoor_col = "outdoor_mean_f" in day_df.columns and day_df["outdoor_mean_f"].notna().any()
     hdr = (f"  {'day':<12}{'cov%':>7}{'flag':>10}{'AC ev':>7}{'rej':>5}"
            f"{'duty%':>8}{'Tmin':>8}{'Tmax':>8}{'range':>8}{'tau(h)':>9}")
+    if have_outdoor_col:
+        hdr += f"{'Tout':>8}{'Δin-out':>9}"
     A(hdr)
     for _, r in day_df.sort_values("analysis_day").iterrows():
-        A(f"  {str(r['analysis_day']):<12}{r['coverage_pct']:>7.1f}"
-          f"{('PARTIAL' if r['is_partial'] else 'full'):>10}"
-          f"{int(r.get('ac_events', 0)):>7}{int(r.get('rejected_transients', 0) or 0):>5}"
-          f"{r.get('hvac_duty_cycle_pct', float('nan')):>8.1f}"
-          f"{r['t_min']:>8.2f}{r['t_max']:>8.2f}{r['t_range']:>8.2f}"
-          f"{r.get('tau_hours_weighted', float('nan')):>9.2f}")
+        line = (f"  {str(r['analysis_day']):<12}{r['coverage_pct']:>7.1f}"
+                f"{('PARTIAL' if r['is_partial'] else 'full'):>10}"
+                f"{int(r.get('ac_events', 0)):>7}{int(r.get('rejected_transients', 0) or 0):>5}"
+                f"{r.get('hvac_duty_cycle_pct', float('nan')):>8.1f}"
+                f"{r['t_min']:>8.2f}{r['t_max']:>8.2f}{r['t_range']:>8.2f}"
+                f"{r.get('tau_hours_weighted', float('nan')):>9.2f}")
+        if have_outdoor_col:
+            line += (f"{fmt(r.get('outdoor_mean_f', np.nan), '.1f'):>8}"
+                      f"{fmt(r.get('indoor_outdoor_delta_f', np.nan), '+.1f'):>9}")
+        A(line)
     A("")
 
     A("─" * 88)
