@@ -49,7 +49,7 @@ void setup() {
   delay(2000);  // Allow serial monitor to attach before first print
 
   Serial.println();
-  Serial.println("[BOOT] SmartHome Monitor Level 1 — Basic Environmental Monitor");
+  Serial.println("[BOOT] SmartHome Monitor Level 1 — Basic Monitoring");
 
   Wire.begin();
 

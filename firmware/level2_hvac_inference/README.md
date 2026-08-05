@@ -1,97 +1,119 @@
-# Level 2 — HVAC State Inference
+# collected-data — temperature analysis
 
-Detects whether the HVAC system (furnace in winter, AC in summer) is currently running, by measuring the temperature slope over a rolling 60-second window. Approximately 200 lines.
+Analysis pipeline for the BME280 temperature feed exported from Adafruit IO.
+Designed to be re-run unchanged on each new export (every 1–2 weeks).
 
-## The idea in one paragraph
+## Run it
 
-An HVAC system does not directly report its state to a homeowner without professional integration. A room thermometer, however, indirectly reveals HVAC state: when the furnace turns on, the temperature rises; when it turns off, the temperature falls back toward equilibrium. If we sample temperature frequently enough and compute its rate of change, we can infer the HVAC state from the sign and magnitude of that rate — no smart thermostat required.
-
-## Why this is harder than it sounds
-
-Three practical problems complicate the naive "slope > 0 means heating on" approach:
-
-**Sensor noise.** A single reading can jump ±0.1°F due to sensor noise even when the room temperature is truly stable. This gets classified as a positive or negative slope depending on which direction the noise pushes. Solution: exponential smoothing (EMA) with α = 0.25.
-
-**Sensor resolution.** The original implementation used a DHT11 with 1°C (~1.8°F) resolution. This produces a staircase-shaped temperature trace even when the room is warming smoothly: several samples read the same integer value, then jump up by one. The apparent slope is zero during flat portions and infinite at the steps. Solution: a "dead zone" for slopes below ±0.20°F/min, during which the state machine's confirmation counters are held rather than reset. The BME280 has 0.01°C resolution, so this compensation matters much less, but it is retained because it also handles the naturally flat portions between HVAC cycles when the room reaches thermal equilibrium.
-
-**False positives from transients.** A door opening for 10 seconds produces a brief negative slope in winter that a naive detector would misinterpret as HVAC turning off. Solution: require 3 consecutive slope confirmations (15 seconds at a 5-second sample rate) before declaring a state change.
-
-## Algorithm at a glance
-
-```
-Every 5 seconds:
-    1. read temperature from BME280
-    2. apply EMA smoothing:  T_ema = 0.25 * T_new + 0.75 * T_ema
-    3. push (timestamp, T_ema) into a circular buffer
-    4. find the buffer sample >= 60 seconds old
-    5. slope = (T_ema_now - T_old) / (t_now - t_old) in °F/min
-    6. classify slope:
-         - strongOn:   clear signal HVAC is running
-         - strongOff:  clear signal HVAC is off
-         - deadZone:   slope magnitude below 0.20 °F/min
-    7. run state machine:
-         - if currently OFF and strongOn: increment onConfirm
-         - if 3 consecutive strongOn: declare HVAC ON, publish to Adafruit IO
-         - (symmetric for ON → OFF transition)
-    8. every 30 seconds, publish current temperature and state
+```bash
+cd collected-data
+python analyze_temperature.py                      # globs *.csv in this folder
+python analyze_temperature.py export1.csv export2.csv
+python analyze_temperature.py --weather            # add outdoor-temp cross-check
+python analyze_temperature.py --no-plots
 ```
 
-## Season mode
+Requires only `numpy`, `pandas`, `matplotlib`. No scipy, no API keys.
 
-The code has a single-line configuration at the top:
+## Input
 
-```cpp
-constexpr uint8_t SEASON_MODE = 0;   // 0 = WINTER, 1 = SUMMER
+Adafruit IO feed export: `id,value,feed_id,created_at,lat,lon,ele`, with
+`created_at` in **UTC** and `value` in °F. Multiple files are concatenated and
+de-duplicated by record `id`, so overlapping exports are safe to drop in
+together.
+
+## What it does
+
+| Step | Detail |
+|---|---|
+| Timezone | UTC → `America/New_York` (all analysis and reporting is local) |
+| Day segmentation | 03:00 → 03:00 local. Partial days are analysed and flagged with `coverage_pct` |
+| Resampling | Uniform 30 s grid; outages > 5 min are left as NaN so no slope is ever computed across a gap |
+| AC event detection | Rolling least-squares dT/dt; a cooling run below −0.15 °F/min lasting ≥ 1.5 min and dropping ≥ 0.5 °F is an event. Boundaries refined to the compressor-start knee and the recovery trough |
+| Transient rejection | An event is rejected only if it *both* follows a rise > +0.5 °F/min *and* fails to end ≥ 0.75 °F below its pre-event baseline. Rise rate alone cannot separate a disturbance from a genuine cycle, because real cycles also start off a fast recovery leg — the discriminator is whether the event left the room actually cooler. Rejected events are still reported with the numbers behind the call |
+| Confidence flag | Events that pass the rejection test but still end < 0.75 °F below baseline are **counted and flagged `low`**. Short near-setpoint cycling late in the evening and a local disturbance look identical at this sampling rate; the ambiguity is surfaced rather than silently resolved |
+| Period stats | Cooling and recovery-heating slope per event, aggregated over night / morning / afternoon / evening |
+| Setpoint-raise coast | The longest AC-free warming stretch — the afternoon window where the thermostat sits near 86 °F |
+| Thermal time constant | See below |
+
+### Time-of-day periods
+
+| Period | Window (local) |
+|---|---|
+| night | 22:00 – 05:00 |
+| morning | 05:00 – 10:00 |
+| afternoon | 10:00 – 18:00 |
+| evening | 18:00 – 22:00 |
+
+### Thermal time constant
+
+Lumped first-order model, HVAC off: `dT/dt = (T∞ − T)/τ`.
+
+Two independent estimators are reported:
+
+1. **Curve fit (primary)** — least-squares fit of
+   `T(t) = T∞ − (T∞ − T0)·e^(−t/τ)`. For a fixed τ the model is linear in
+   `(T∞, T0)`, so it is solved in closed form on a log-spaced τ grid. Fitting
+   the temperature curve is far better conditioned than fitting its derivative.
+2. **Rate regression (cross-check)** — OLS of `dT/dt` on `T`; `τ = −1/slope`,
+   `T∞ = −intercept/slope`.
+
+Passive stretches are split into **monotone runs** before fitting, because a
+stretch that warms and then cools is being driven by a moving outdoor
+temperature and violates the single-asymptote assumption.
+
+**Identifiability gate.** Over a window of length `L` a first-order response
+closes `1 − e^(−L/τ)` of its gap. When that fraction is small the exponential is
+indistinguishable from a straight line: τ runs off toward infinity and T∞
+becomes meaningless *even though R² looks excellent*. Fits closing < 35% of the
+gap are reported but excluded from the summary and marked NOT IDENTIFIABLE on
+the plots.
+
+## Outputs
+
+Written to `analysis_output/`. Filenames are stamped with the **data's**
+datetime range (not the run time), so re-running on the same export overwrites
+in place and a new export lands in new files.
+
+```
+analysis_output/
+  reports/
+    hvac_analysis_<start>_to_<end>_daily_summary.csv    per-day totals, coverage, τ
+    hvac_analysis_<start>_to_<end>_ac_events.csv        one row per detected cycle
+    hvac_analysis_<start>_to_<end>_period_stats.csv     slope stats per day × period
+    hvac_analysis_<start>_to_<end>_thermal_tau.csv      every fit, accepted or not
+    hvac_analysis_<start>_to_<end>_setpoint_raise.csv   the afternoon coast
+    hvac_analysis_<start>_to_<end>_report.txt           the terminal report
+  plots/
+    raw_full_record.png            whole record, events shaded, day boundaries
+    days_overlaid.png              all analysis days on one 03:00→03:00 axis
+    period_slope_summary.png       slope distributions + event counts by period
+    day_<date>_diagnostic.png      per-day trace + dT/dt with every fit drawn
+    day_<date>_cycle_detail.png    zoom on the deepest cycle — how slopes are measured
+    day_<date>_thermal_tau.png     τ fits with residuals and identifiability
 ```
 
-In WINTER mode, a positive slope means the furnace is running. In SUMMER mode, a negative slope means the AC is running. Everything else in the algorithm is symmetric. Switching modes requires a recompile and re-upload.
+## Tuning
 
-A future improvement would be to move `SEASON_MODE` to a runtime configuration parameter fetched from Adafruit IO, so the mode can be changed from the dashboard without a firmware upload.
+Drop a `config.json` next to the script to override any default without
+editing code. Every key in `DEFAULT_CONFIG` is overridable, e.g.:
 
-## Threshold calibration
-
-The three threshold constants are:
-
-| Constant | Value | Meaning |
-|---|---|---|
-| `SLOPE_ON_F_PER_MIN` | 0.25 | Slope magnitude above which we consider HVAC clearly ON |
-| `SLOPE_OFF_F_PER_MIN` | 0.05 | Slope magnitude in the opposite direction that indicates OFF |
-| `SLOPE_DEADZONE` | 0.20 | Slope magnitude below which the signal is treated as ambiguous |
-
-These values were derived from analyzing several days of DHT11 data collected in a small apartment during heating cycles. The values are approximate and may need adjustment for larger rooms (slower thermal response, lower slope magnitudes) or high-power HVAC (faster response, higher slope magnitudes).
-
-To recalibrate: leave Level 1 running for a few days with high-frequency publishing (every 10 seconds), export the data from Adafruit IO, plot temperature vs. time in Python, and observe the slope during known HVAC ON periods. Set `SLOPE_ON_F_PER_MIN` to approximately the 25th percentile of observed ON-slopes.
-
-## Setup
-
-Prerequisites are the same as Level 1. Additionally:
-
-1. Create the feed `home-hvac-state` in the Adafruit IO dashboard.
-2. Set `SEASON_MODE` at the top of the sketch to match your current season.
-3. Optionally adjust the slope thresholds if your environment differs from a small apartment.
-
-## Expected serial output
-
-```
-[BOOT] SmartHome Monitor Level 2 — HVAC State Inference
-[BOOT] Season mode: WINTER
-[BME]  Sensor initialized.
-[WIFI] Connecting.....
-[IO]   Adafruit IO Connected
-[LOOP] T=68.42F  slope=+0.02F/min  hvac=OFF  confirm=0
-[LOOP] T=68.51F  slope=+0.15F/min  hvac=OFF  confirm=0
-[LOOP] T=68.79F  slope=+0.31F/min  hvac=OFF  confirm=1
-[LOOP] T=69.12F  slope=+0.42F/min  hvac=OFF  confirm=2
-[HVAC] HEAT ON @ 69.4F  slope=+0.48F/min  cycle #1
-[LOOP] T=69.63F  slope=+0.51F/min  hvac=ON   confirm=0
-...
-[HVAC] HEAT OFF @ 72.1F  slope=-0.09F/min
+```json
+{
+  "timezone": "America/New_York",
+  "cool_slope_on": 0.15,
+  "artifact_rise_f_per_min": 0.50,
+  "periods": {"night": [22, 5], "morning": [5, 10],
+              "afternoon": [10, 18], "evening": [18, 22]}
+}
 ```
 
-## What this does not (yet) do
+The `--weather` flag pulls hourly outdoor temperature from Open-Meteo (no key
+required) for a physically anchored τ. It fails soft: if the network is
+unavailable the indoor-only estimate is reported alone. This path has not been
+exercised in a sandboxed environment — verify it once on your machine.
 
-- No rolling 24-hour or 7-day statistics (was in the original implementation, deferred here for readability).
-- No cycle-count aggregation over long periods.
-- No adaptive threshold learning (the thresholds are compile-time constants).
+## Related
 
-The full original implementation with these features exists in project history but was simplified for the portfolio version. Level 3 reintroduces some of this complexity in a more general framework.
+`docs/HVAC_STATE_BUG.md` — why the `home-hvac-state` feed sat pinned at `1`,
+and the threshold calibration this analysis feeds back into the firmware.
