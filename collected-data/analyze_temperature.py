@@ -20,11 +20,9 @@ Design goals
 
 Usage
 -----
-    python analyze_temperature.py                    # glob *.csv in this directory
+    python analyze_temperature.py                    # glob *.csv in raw-data/
     python analyze_temperature.py data1.csv data2.csv
     python analyze_temperature.py --outdir results --weather
-
-Author: generated for the home-sensor-platform project.
 """
 
 from __future__ import annotations
@@ -50,11 +48,15 @@ import matplotlib.dates as mdates
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# CSVs live in raw-data/ now (used to sit next to the script). Fall back to
+# SCRIPT_DIR itself so this doesn't break again if someone flattens it back out.
+RAW_DATA_DIR = os.path.join(SCRIPT_DIR, "raw-data")
+if not os.path.isdir(RAW_DATA_DIR):
+    RAW_DATA_DIR = SCRIPT_DIR
+print(f"[cfg]  Script directory: {SCRIPT_DIR}")
+print(f"[cfg]  Raw data directory: {RAW_DATA_DIR}")
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Configuration
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- Configuration ----
 
 DEFAULT_CONFIG = {
     # ── Locale / calendar ──────────────────────────────────────────────────────
@@ -149,9 +151,7 @@ def load_config(outdir_hint: str) -> dict:
     return cfg
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Loading & preprocessing
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- Loading & preprocessing ----
 
 REQUIRED_COLS = {"value", "created_at"}
 
@@ -162,8 +162,8 @@ def discover_inputs(args_paths: list[str]) -> list[str]:
         for p in args_paths:
             out.extend(sorted(glob.glob(p)) if any(c in p for c in "*?[") else [p])
         return out
-    # Auto-discover: any CSV in the script directory that looks like a feed export.
-    cands = sorted(glob.glob(os.path.join(SCRIPT_DIR, "*.csv")))
+    # Auto-discover: any CSV in raw-data/ that looks like a feed export.
+    cands = sorted(glob.glob(os.path.join(RAW_DATA_DIR, "*.csv")))
     keep = []
     for c in cands:
         try:
@@ -277,9 +277,7 @@ def smooth_and_slope(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     return df
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Day segmentation & period assignment
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- Day segmentation & period assignment ----
 
 def assign_days(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """Label each sample with the 3AM-to-3AM analysis day it belongs to.
@@ -309,9 +307,7 @@ def add_period(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     return df
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AC event detection
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- AC event detection ----
 
 @dataclass
 class ACEvent:
@@ -526,9 +522,7 @@ def detect_events(day: pd.DataFrame, cfg: dict, day_label: str) -> list[ACEvent]
     return events
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Setpoint-raise detection (the long afternoon coast to ~86F)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- Setpoint-raise detection (the long afternoon coast to ~86F) ----
 
 def detect_setpoint_raise(day: pd.DataFrame, events: list[ACEvent], cfg: dict):
     """Find the longest AC-free warming stretch — the window where the thermostat was
@@ -561,9 +555,7 @@ def detect_setpoint_raise(day: pd.DataFrame, events: list[ACEvent], cfg: dict):
     return best
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Thermal time constant
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- Thermal time constant ----
 #
 # Newton / first-order lumped-capacitance model for the indoor air with the HVAC off:
 #
@@ -823,9 +815,7 @@ def fetch_outdoor(df: pd.DataFrame, cfg: dict) -> pd.Series | None:
     return None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Plotting
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- Plotting ----
 
 PERIOD_COLORS = {"night": "#2c3e70", "morning": "#e8a33d",
                  "afternoon": "#c0392b", "evening": "#7d3c98"}
@@ -1142,9 +1132,7 @@ def plot_tau(day, segs, fits, cfg, day_label, path):
     return True
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Reporting
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- Reporting ----
 
 def fmt(x, spec=".3f", na="—"):
     return na if x is None or (isinstance(x, float) and not np.isfinite(x)) else format(x, spec)
@@ -1194,14 +1182,12 @@ def print_report(lines: list[str]):
         print(ln)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Main
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---- Main ----
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("paths", nargs="*", help="CSV file(s) or glob(s). Default: *.csv here.")
+    ap.add_argument("paths", nargs="*", help="CSV file(s) or glob(s). Default: *.csv in raw-data/.")
     ap.add_argument("--outdir", default=os.path.join(SCRIPT_DIR, "analysis_output"))
     ap.add_argument("--weather", action="store_true",
                     help="attempt the optional outdoor-temperature cross-check")
@@ -1214,7 +1200,7 @@ def main(argv=None):
 
     paths = discover_inputs(args.paths)
     if not paths:
-        raise SystemExit(f"No CSVs found. Looked in {SCRIPT_DIR}")
+        raise SystemExit(f"No CSVs found. Looked in {RAW_DATA_DIR}")
 
     raw = load_data(paths, cfg["timezone"])
     df = to_uniform_grid(raw, cfg)
