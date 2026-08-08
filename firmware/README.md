@@ -2,6 +2,8 @@
 
 Firmware for the SmartHome Monitor is organized as four progressive tiers. Each tier is a self-contained Arduino sketch that compiles and runs independently on the same hardware. Higher tiers add capability without breaking the interface established by lower tiers.
 
+Alongside the numbered tiers, `dev_*` directories hold work in progress toward Level 4 — small, isolated proofs of one piece of the pipeline (the Spotify API, the HTTPS image fetch) built and tested before they're combined into a real sketch.
+
 ## Common setup
 
 All firmware tiers share a common credentials file. Before compiling any tier:
@@ -27,6 +29,8 @@ Install via the Arduino IDE Library Manager:
 
 Board support: install "esp32" by Espressif Systems via the Boards Manager (Additional URLs: `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`). Select "XIAO_ESP32C3" as the target.
 
+`dev_spotifyMCU` needs no additional libraries beyond the board package itself — `WiFiClientSecure`, `HTTPClient`, and `mbedtls/base64.h` all ship with it.
+
 ## Tier overview
 
 ### [Level 1 — Basic monitor](level1_basic_monitor/)
@@ -40,6 +44,16 @@ Approximately 350 lines. Adds VEML7700 ambient light reading, thermistor divider
 
 ### [Level 4 — Spotify album-art display](level4_future_spotify_display/) (future work)
 Roadmap only — no firmware yet. Describes the OAuth 2.0 flow, TLS requirements, and JPEG decode pipeline that will drive the WS2812B matrix.
+
+## Level 4 stepping stones
+
+Level 4 is a lot to get right in one sketch — OAuth, TLS, JSON, JPEG decode, and LED output all at once. These `dev_*` directories isolate one piece at a time and get it working on its own first.
+
+### [dev_spotifyAPI](dev_spotifyAPI/)
+Desktop Python harness for the Spotify Web API: OAuth 2.0 + PKCE, polling `currently-playing`, downloading album art. No hardware involved — the point is to work out the API contract somewhere with a debugger before porting request shapes to the ESP32.
+
+### [dev_spotifyMCU](dev_spotifyMCU/)
+The first on-device step: proves the XIAO ESP32-C3 can open a TLS connection, `GET` a binary image over HTTPS, and get the bytes back intact. No OAuth yet (the test URL is pasted in manually), no JPEG decode, no LED output — just the networking path, isolated so a bug here doesn't get confused with a bug anywhere else.
 
 ## Coding conventions
 
