@@ -2,9 +2,9 @@
 """
 spotifyMCU_reconstruction.py
 
-Companion to dev_spotifyMCU.ino. Listens on the ESP32's serial port, finds
+Companion to spotifyMCU_code.ino. Listens on the ESP32's serial port, finds
 the base64-framed image the sketch prints, decodes it, and writes it out as
-a real file — so you can actually open it and confirm the round trip
+a real file - so you can actually open it and confirm the round trip
 (WiFi -> TLS -> HTTP GET -> Serial) produced an intact image, not just "some
 bytes showed up."
 
@@ -37,12 +37,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-
-try:
-    import serial
-except ImportError:
-    print("[FATAL] pyserial is not installed. Run:  pip install pyserial", file=sys.stderr)
-    sys.exit(1)
+import serial # pip install pyserial
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTDIR = SCRIPT_DIR / "captures"
@@ -51,7 +46,7 @@ BEGIN_RE = re.compile(r"^<<<IMG_BEGIN len=(\d+) type=(\S+)>>>$")
 END_MARK = "<<<IMG_END>>>"
 
 # Best-effort content-type -> extension. Falls back to .bin for anything we
-# don't recognize, which is still useful — you can rename it and inspect the
+# don't recognize, which is still useful - you can rename it and inspect the
 # bytes by hand to see what actually came back.
 EXT_BY_TYPE = {
     "image/jpeg": ".jpg",

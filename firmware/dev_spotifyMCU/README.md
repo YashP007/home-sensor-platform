@@ -1,53 +1,62 @@
-# dev_spotifyMCU — HTTPS image fetch test
+# dev_spotifyMCU
 
-A stepping stone toward [Level 4](../level4_future_spotify_display/), not the
-real pipeline. Before writing OAuth-on-a-microcontroller and a JPEG decoder,
-this proves the one thing everything else depends on: that the XIAO
-ESP32-C3 can open a TLS connection, `GET` a binary image over HTTPS, and
-hand the bytes back intact.
+Gets the XIAO ESP32-C3 actually talking to Spotify - refreshing a token,
+polling what's playing, pulling the album art over HTTPS - without any of
+the JPEG decode or LED matrix work yet. That's still ahead of us; see
+[Level 4](../level4_future_spotify_display/) for the full plan.
 
-It isolates the networking question from everything else, so if something
-breaks later during real Level 4 development, you already know the HTTP/TLS
-path works and the bug is somewhere else.
+Started as just an HTTPS image fetch test (proving TLS + GET even worked on
+this chip before dragging OAuth into it). That test mode is still in there -
+flip `USE_SPOTIFY` to 0 in the sketch and it goes back to hammering a static
+test URL, which is still the fastest way to tell a network problem apart
+from a Spotify problem.
 
 ## How it works
 
 ```
-  ESP32-C3                                  your computer
-  ────────                                  ─────────────
+  ESP32-C3                                      your computer
+  --------                                      -------------
   connect WiFi
-  HTTPS GET test image  ──────────────────>
-                         <──────────────────  image bytes
-  base64-encode
-  print over Serial,     ──────────────────>  spotifyMCU_reconstruction.py
-  framed with markers                         decodes it, saves a real file
+  POST accounts.spotify.com/api/token   ------->
+                                          <-------  access token
+  GET .../currently-playing               ------->
+                                          <-------  track info + art url
+  GET the art url                         ------->
+                                          <-------  image bytes
+  base64-encode, print over serial        ------->  spotifyMCU_reconstruction.py
+                                                      decodes it, saves a real file
 ```
 
-Base64 over Serial, not raw bytes — a dropped byte in a raw binary stream
-produces an unrecoverable frame with no good way to tell what went wrong.
-Text either arrives intact or the corruption is obvious immediately.
+Album art goes out as base64 over serial rather than raw bytes, on purpose -
+a dropped byte in a raw binary stream wrecks the whole frame with no way to
+tell what happened. Text either shows up intact or the corruption is obvious.
 
 ## Setup
 
-The sketch lives in `spotifyMCU_code/spotifyMCU_code.ino` — Arduino requires
-the containing folder name to match the `.ino` filename, so that's where it
-has to sit even though this README is one level up.
+The sketch lives in `spotifyMCU_code/spotifyMCU_code.ino` - Arduino wants
+the folder name to match the `.ino` name, so that's where it has to sit even
+though this README is one level up.
 
 1. Copy `spotifyMCU_code/secrets_example.h` to `spotifyMCU_code/secrets.h`
-   (must be next to the `.ino`, not in this top-level directory).
-2. Fill in your WiFi credentials.
-3. Grab a real, current album-art URL to test against:
+   (has to be next to the `.ino`, not up here).
+2. Fill in WiFi.
+3. Get a Spotify client ID: developer.spotify.com/dashboard -> your app ->
+   Settings. No client secret needed - same PKCE public-client setup as the
+   desktop script.
+4. Get a refresh token by running the desktop auth flow once:
    ```
    cd ../dev_spotifyAPI
-   python spotify_test.py now --verbose --art-size 64
+   python spotify_test.py auth
    ```
-   Copy the 64px image's `"url"` field out of the printed JSON into
-   `TEST_IMAGE_URL` in `secrets.h`. (Any small HTTPS JPEG works if you just
-   want to prove connectivity before Spotify's involved at all.)
-4. Arduino IDE: File > Open, select `spotifyMCU_code/spotifyMCU_code.ino`.
-   Board: `XIAO_ESP32C3`. Upload.
-   No extra libraries needed beyond the ESP32 board package itself —
-   `WiFiClientSecure`, `HTTPClient`, and `mbedtls/base64.h` all ship with it.
+   then copying `refresh_token` out of the `tokens.json` it writes. Paste
+   both into `secrets.h`. The device never opens a browser or does the
+   authorize-page dance itself - it only ever exchanges this refresh token
+   for a fresh access token, which is why there's no redirect URI to worry
+   about here.
+5. Arduino IDE: File > Open, `spotifyMCU_code/spotifyMCU_code.ino`.
+   Board: `XIAO_ESP32C3`. Install `ArduinoJson` via Library Manager if you
+   haven't already - everything else (`WiFiClientSecure`, `HTTPClient`,
+   `Preferences`, `mbedtls`'s base64) ships with the board package. Upload.
 
 ## Running it
 
@@ -56,55 +65,69 @@ pip install pyserial
 python spotifyMCU_reconstruction.py --port COM5
 ```
 
-(Port varies — check Arduino IDE's Tools > Port, or Device Manager on
-Windows.) Leave it running while the sketch is uploaded and executing. Every
-`FETCH_INTERVAL_MS` (15s by default) you should see:
+(Port varies - Arduino IDE's Tools > Port, or Device Manager on Windows.)
+Leave it running while the sketch executes. Play something on Spotify and
+you should see, within `FETCH_INTERVAL_MS` (15s by default):
 
 ```
+[mcu] [TOKEN] refreshing
+[mcu] [TOKEN] good for 3600s
+[mcu] [SPOTIFY] now playing: Caroline Polachek - Bunny Is A Rider
 [mcu] [HTTP] GET https://i.scdn.co/image/...
-[mcu] [HTTP] 200 OK, Content-Type=image/jpeg, Content-Length=4213
+[mcu] [HTTP] 200 OK, type=image/jpeg, length=4213
 [SERIAL] capturing image: declared 4213 bytes, type=image/jpeg
 [CAPTURE] saved 4213 bytes -> captures/capture_20260807-223857.jpg (looks like a valid JPEG)
 ```
 
-Open the saved file. If it renders as a real image, the round trip works —
-WiFi, TLS, HTTP GET, streaming read, base64 encode, serial transport, and
-decode are all confirmed good.
+Skip a track and it should fetch new art. Let the same track keep playing
+and it shouldn't - `lastTrackLabel` gates the download so it only happens on
+an actual change, same idea as the `watch` command in `dev_spotifyAPI`.
+
+Open the saved file. If it renders, the whole chain worked - auth, the
+currently-playing poll, the art fetch, base64 over serial, and decode back
+on the desktop side.
 
 ## What this deliberately does NOT do yet
 
-- No OAuth. `TEST_IMAGE_URL` is a static, manually-pasted URL.
 - No JPEG decode on-device. The image is proven readable on your computer,
-  not on the ESP32.
+  not on the ESP32 - that's a separate piece of work.
 - No LED matrix output.
-- `client.setInsecure()` skips certificate validation. Fine for proving the
-  path works; must be replaced with a real root CA bundle before this goes
-  anywhere near production (see the Level 4 README for why).
-
-Each of those is a separate, addressable problem once this foundation is
-confirmed solid.
+- `client.setInsecure()` skips certificate validation on every HTTPS call.
+  Fine for proving the path works, but it needs a real root CA bundle
+  before this goes anywhere near a device that isn't sitting on your desk.
+  See the Level 4 README for what that involves.
+- The refresh token lives in `secrets.h` at flash time and gets copied into
+  NVS (via `Preferences`) on first boot. If Spotify rotates it during a
+  refresh, the new one gets saved back to NVS automatically - but if you
+  ever reflash with a stale `secrets.h`, the old value in NVS still wins,
+  since it's only seeded from `secrets.h` when NVS is empty. Worth knowing
+  if refresh ever starts failing after you've changed `secrets.h` and
+  reflashed: erase flash first, or clear the `spotify` NVS namespace.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| `[HTTP] ERROR: request failed` | TLS handshake failure, DNS issue, or `setInsecure()` somehow removed. Check WiFi is actually connected first. |
-| `[HTTP] ERROR: server returned HTTP 404` | The pasted `TEST_IMAGE_URL` expired or was mistyped — Spotify's CDN URLs are not permanent, grab a fresh one. |
-| `[HTTP] ERROR: image is N bytes, over the cap` | Raised `--art-size` too high, or pointed at a non-64px image. Use `--art-size 64` when grabbing the test URL. |
-| Reconstruction script: `base64 decode failed` | A serial line got corrupted or dropped. Usually a bad USB cable/port or a baud mismatch — confirm both sides use 115200. |
-| Reconstruction script: file saved but doesn't open / not a valid JPEG | `[CAPTURE]` will say so explicitly (missing SOI/EOI markers) — likely a stalled or truncated download. Check `[HTTP] ERROR: stalled mid-download` on the device side. |
-| `Could not open COMx` | Something else has the port — usually the Arduino Serial Monitor. Close it before running the Python script (or vice versa; only one can hold the port at a time). |
+| `[TOKEN] refresh failed, HTTP 400` | Refresh token expired, got revoked, or belongs to a different client ID. Re-run `spotify_test.py auth` on the desktop and paste in the new one. |
+| `[TOKEN] refresh failed` immediately after changing `secrets.h` | NVS still has the old refresh token cached from a previous flash - see the note above. Erase flash and re-upload. |
+| `[SPOTIFY] nothing playing right now` | Not an error - Spotify's 204 response for "nothing active." Start playback and it'll pick it up next cycle. |
+| `[SPOTIFY] currently-playing returned HTTP 403` | Token lacks the right scope, or your Spotify app is in Development Mode and this account isn't on the allow-list (dashboard -> your app -> User Management). |
+| `[HTTP] request failed` (image fetch) | TLS handshake failure or DNS issue. Confirm WiFi is actually connected first. |
+| `[HTTP] image is N bytes, over the cap` | `MAX_IMAGE_BYTES` is 32KB by default; something's requesting a bigger art size than expected. |
+| Reconstruction script: `base64 decode failed` | A serial line got corrupted or dropped - usually a bad cable/port or baud mismatch. Confirm both sides use 115200. |
+| Reconstruction script: saved file isn't a valid JPEG | `[CAPTURE]` flags this directly (missing SOI/EOI markers) - usually a stalled or truncated download. Check for `[HTTP] stalled mid-download` on the device side. |
+| `Could not open COMx` | Something else has the port, usually the Arduino Serial Monitor. Only one program can hold it at a time. |
 
 ## Better ways to develop and test this
 
 A few things worth doing as this grows past "stepping stone":
 
-**Get a real compiler check without the IDE.** [`arduino-cli`](https://arduino.github.io/arduino-cli/) compiles from the command line — `arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32C3 .` catches syntax errors in seconds instead of round-tripping through the IDE. Worth setting up once, especially if you want a CI check on every push (a GitHub Actions job that just compiles, no hardware needed, catches a broken build before you're standing next to the device).
+**Get a real compiler check without the IDE.** [`arduino-cli`](https://arduino.github.io/arduino-cli/) compiles from the command line: `arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32C3 .` catches syntax errors in seconds instead of round-tripping through the IDE, and it's scriptable into a GitHub Actions job that compiles on every push with no hardware needed.
 
-**Desktop-first, like `dev_spotifyAPI`.** The Python harness in the sibling directory is the pattern to keep leaning on: anything that isn't inherently hardware (URL construction, JSON shape, error handling logic) is faster to get right in Python with a debugger than on-device with a 115200-baud println. This sketch already follows that split — HTTP/TLS is the only thing actually tested on hardware here.
+**Keep leaning on the desktop-first split.** `dev_spotifyAPI` is still the place to work out anything that isn't inherently hardware - the JSON shape, error handling, retry logic. It's a lot faster to iterate there with a real debugger than on-device with a 115200-baud println. This sketch's `fetchCurrentlyPlaying()` and `ensureAccessToken()` are close ports of what the Python script already proved out.
 
-**Unit-testable pieces, even in C++.** Things like `readImageBody()`'s stall-timeout logic or the base64 chunking could be pulled into plain functions and tested against a fake `Stream` with something like [Unity](http://www.throwtheswitch.org/unity) or [AUnit](https://github.com/bxparks/AUnit) — off-device, fast, no upload cycle. Probably overkill at this size, but worth knowing about once the sketch grows past a few hundred lines.
+**Watch the heap, don't guess at it.** `ESP.getFreeHeap()` printed at boot and after each fetch would show directly whether TLS plus the 32KB image buffer plus the ~40KB base64 buffer are actually leaving headroom, instead of inferring it from the datasheet. Worth adding before a JPEG decoder gets stacked on top of all this.
 
-**A serial log capture, not just a live view.** `spotifyMCU_reconstruction.py` could `tee` everything to a timestamped `.log` file alongside the captured images, so a flaky run overnight leaves a trail instead of just scrolled-off terminal output. Small addition if you find yourself debugging something intermittent.
+**A persistent log, not just a live view.** `spotifyMCU_reconstruction.py` could tee everything to a timestamped `.log` file next to the captured images, so an overnight run that hits something flaky leaves a trail instead of scrolled-off terminal output.
 
-**Memory margin, watched not assumed.** `ESP.getFreeHeap()` printed once at boot and once after each fetch would tell you directly whether TLS + the 32KB image buffer + 40KB base64 buffer are actually leaving enough headroom, instead of inferring it from the datasheet. Cheap to add, and worth having before this sketch grows a JPEG decoder on top.
+**Unit-testable pieces, even in C++.** Things like the base64 chunking or the "closest to 64px" image-picking logic could be pulled out and tested against fixed inputs with something like [Unity](http://www.throwtheswitch.org/unity) or [AUnit](https://github.com/bxparks/AUnit), off-device and fast. Probably not worth it yet at this size, but worth knowing about once the sketch keeps growing.
