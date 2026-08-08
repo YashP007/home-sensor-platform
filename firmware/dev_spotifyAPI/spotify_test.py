@@ -725,14 +725,19 @@ def cmd_now(cfg: dict, args) -> None:
 
     sizes = ", ".join(f"{im.get('width')}x{im.get('height')}" for im in info["images"])
     log("NOW", f"  art    {sizes or 'none available'}")
+
+    chosen = pick_image(info["images"], args.art_size) if info["images"] else None
+    if chosen:
+        # Printed on its own line, unquoted, so it's a clean copy-paste into
+        # TEST_IMAGE_URL in the ESP32 sketch's secrets.h - no need to dig
+        # through --verbose output just to grab a URL.
+        log("NOW", f"  url    {chosen['url']}")
     print()
 
     if not args.save_art:
         log("NOW", "art download skipped (--no-save-art)")
-    elif info["images"]:
-        chosen = pick_image(info["images"], args.art_size)
-        if chosen:
-            download_art(chosen, f"{info['artist']} - {info['album']}", verbose=args.verbose)
+    elif chosen:
+        download_art(chosen, f"{info['artist']} - {info['album']}", verbose=args.verbose)
 
 
 def cmd_watch(cfg: dict, args) -> None:
