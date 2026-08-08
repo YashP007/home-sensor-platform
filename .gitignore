@@ -7,10 +7,12 @@ firmware/**/tokens.json
 *.pem
 
 # Data files and plot outputs
-collected-data/raw-data/
-collected-data/analysis_output/
-firmware\dev_spotifyMCU\captures
-firmware\dev_spotifyAPI\art
+# Collected data (ignore directories and all their contents)
+/collected-data/raw-data/**
+/collected-data/analysis_output/**
+# Firmware development captures/art (use forward slashes for cross-platform Git)
+/firmware/dev_spotifyMCU/captures/**
+/firmware/dev_spotifyAPI/art/**
 
 secrets.env
 tokens.json
