@@ -221,15 +221,21 @@ def to_uniform_grid(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 
     # Blank out anything that fell inside a real outage, so no slope is ever
     # computed across interpolated-from-nothing data.
+
     gap_limit = pd.Timedelta(minutes=cfg["max_interp_gap_min"])
     obs = s.index
     deltas = obs[1:] - obs[:-1]
     gi = np.flatnonzero(deltas > gap_limit)
-    gx = grid.to_numpy()
-    bad = np.zeros(len(grid), dtype=bool)
+
+    # Keep all datetime comparisons inside pandas so timezone information
+    # is preserved.
+    bad = pd.Series(False, index=grid)
+
     for i in gi:
-        bad |= (gx > obs[i].to_numpy()) & (gx < obs[i + 1].to_numpy())
-    g[bad] = np.nan
+        bad |= (grid > obs[i]) & (grid < obs[i + 1])
+
+    g.loc[bad] = np.nan
+
     if len(gi):
         print(f"[grid] {len(gi)} outage(s) > {cfg['max_interp_gap_min']:g} min "
               f"(longest {deltas.max().total_seconds()/60:.1f} min) left as NaN")
