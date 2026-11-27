@@ -1,130 +1,110 @@
-# collected-data - temperature analysis
+# collected-data - analysis
 
-Analysis pipeline for the BME280 temperature feed exported from Adafruit IO.
-Designed to be re-run unchanged on each new export (every 1–2 weeks).
+Turns the Adafruit IO exports into weekly dashboards, record-wide plots, summary
+CSVs and a `summary.md` written to be handed (with the PNGs) to an AI model for
+interpretation.
+
+Two scripts share one package (`homesense/`), split by data era:
+
+| Script | Covers | Feeds |
+| --- | --- | --- |
+| `analyze.py` | first light-feed sample → now | indoor temp, outdoor temp, lamp/sun lux (+ humidity / pressure if exported) |
+| `analyze_legacy.py` | everything before that | indoor temp only; outdoor reference from Open-Meteo |
 
 ## Run it
 
 ```bash
 cd collected-data
-python analyze_temperature.py                      # globs *.csv in raw-data/
-python analyze_temperature.py export1.csv export2.csv
-python analyze_temperature.py --weather            # add outdoor-temp cross-check
-python analyze_temperature.py --no-plots
+python analyze.py                    # multi-feed era
+python analyze.py --forecast         # + tonight's pre-heat advice (Open-Meteo forecast)
+python analyze.py --day 2026-10-21   # + one-day dashboard (repeatable)
+python analyze_legacy.py             # temperature-only history
 ```
 
-Drop new Adafruit IO exports into `raw-data/`; that's where auto-discovery looks.
-
-Requires only `numpy`, `pandas`, `matplotlib`. No scipy, no API keys.
+Other flags: `--since` / `--until`, `--raw-dir`, `--out`, `--no-weather`, `--no-html`.
+Requirements: `pip install -r ../requirements.txt` (numpy, pandas, matplotlib, scipy, plotly).
 
 ## Input
 
-Adafruit IO feed export: `id,value,feed_id,created_at,lat,lon,ele`, with
-`created_at` in **UTC** and `value` in °F. Multiple files are concatenated and
-de-duplicated by record `id`, so overlapping exports are safe to drop in
-together.
+Drop exports into `raw-data/` unchanged. Files are matched by name,
+`home-<feed>-<YYYYMMDD>-<HHMM>.csv`, for these feeds:
 
-## What it does
+| feed | column | grid fill |
+| --- | --- | --- |
+| `temperature` | `indoor_f` | interpolate gaps ≤ 6 min |
+| `outdoor-temp` | `outdoor_f` | interpolate gaps ≤ 45 min; Open-Meteo hourly elsewhere |
+| `led-lux` | `led_lux` | hold last value ≤ 10 min (published on change) |
+| `sun-lux` | `sun_lux` | hold last value ≤ 10 min |
+| `humidity`, `pressure` | `humidity_pct`, `pressure_hpa` | hold ≤ 70 min (optional) |
 
-| Step | Detail |
-|---|---|
-| Timezone | UTC → `America/New_York` (all analysis and reporting is local) |
-| Day segmentation | 03:00 → 03:00 local. Partial days are analysed and flagged with `coverage_pct` |
-| Resampling | Uniform 30 s grid; outages > 5 min are left as NaN so no slope is ever computed across a gap |
-| AC event detection | Rolling least-squares dT/dt; a cooling run below −0.15 °F/min lasting ≥ 1.5 min and dropping ≥ 0.5 °F is an event. Boundaries refined to the compressor-start knee and the recovery trough |
-| Transient rejection | An event is rejected only if it *both* follows a rise > +0.5 °F/min *and* fails to end ≥ 0.75 °F below its pre-event baseline. Rise rate alone cannot separate a disturbance from a genuine cycle, because real cycles also start off a fast recovery leg - the discriminator is whether the event left the room actually cooler. Rejected events are still reported with the numbers behind the call |
-| Confidence flag | Events that pass the rejection test but still end < 0.75 °F below baseline are **counted and flagged `low`**. Short near-setpoint cycling late in the evening and a local disturbance look identical at this sampling rate; the ambiguity is surfaced rather than silently resolved |
-| Period stats | Cooling and recovery-heating slope per event, aggregated over night / morning / afternoon / evening |
-| Setpoint-raise coast | The longest AC-free warming stretch - the afternoon window where the thermostat sits near 86 °F |
-| Thermal time constant | See below |
+Overlapping exports are de-duplicated by record id. Open-Meteo responses are
+cached in `raw-data/_cache/`.
 
-### Time-of-day periods
+## Cleaning
 
-| Period | Window (local) |
-|---|---|
-| night | 22:00 – 05:00 |
-| morning | 05:00 – 10:00 |
-| afternoon | 10:00 – 18:00 |
-| evening | 18:00 – 22:00 |
-
-### Thermal time constant
-
-Lumped first-order model, HVAC off: `dT/dt = (T∞ − T)/τ`.
-
-Two independent estimators are reported:
-
-1. **Curve fit (primary)** - least-squares fit of
-   `T(t) = T∞ − (T∞ − T0)·e^(−t/τ)`. For a fixed τ the model is linear in
-   `(T∞, T0)`, so it is solved in closed form on a log-spaced τ grid. Fitting
-   the temperature curve is far better conditioned than fitting its derivative.
-2. **Rate regression (cross-check)** - OLS of `dT/dt` on `T`; `τ = −1/slope`,
-   `T∞ = −intercept/slope`.
-
-Passive stretches are split into **monotone runs** before fitting, because a
-stretch that warms and then cools is being driven by a moving outdoor
-temperature and violates the single-asymptote assumption.
-
-**Identifiability gate.** Over a window of length `L` a first-order response
-closes `1 − e^(−L/τ)` of its gap. When that fraction is small the exponential is
-indistinguishable from a straight line: τ runs off toward infinity and T∞
-becomes meaningless *even though R² looks excellent*. Fits closing < 35% of the
-gap are reported but excluded from the summary and marked NOT IDENTIFIABLE on
-the plots.
+- Out-of-range samples and spikes (> 3 °F from a 15-sample rolling median) are dropped.
+- The 15 min after a power-up (first sample, or any gap > 2.5 min) are dropped. The
+  board reads warm while settling, and one boot produced a 359 °F EMA.
+- **Sun on the sensor:** while `sun_lux` > 2500 (padded 5 min before / 25 min after)
+  the BME280 reads up to ~20 °F above room air. Those minutes are moved to
+  `indoor_raw_f`, drawn dotted under a yellow band, and excluded from every statistic.
 
 ## Outputs
 
-Written to `analysis_output/`. Filenames are stamped with the **data's**
-datetime range (not the run time), so re-running on the same export overwrites
-in place and a new export lands in new files.
+`analysis_output/<current|legacy>/` (wiped and rewritten each run):
 
+```text
+summary.md / summary.json    headline numbers, flags, thermal model, pre-heat guide, column dictionary
+data/daily_summary.csv       one row per calendar day
+data/weekly_summary.csv      one row per ISO week (Mon-Sun)
+data/nights.csv              one row per night: lights-out/wake + overnight coast + model check
+data/preheat_guide.csv       indoor °F needed at 18:00 / 22:00 to stay ≥ 65/68/70 °F at 06:00
+data/hourly_timeseries.csv   hourly means of every feed, for ad-hoc analysis
+data/data_health.csv, data/flags.csv
+plots/weekly/week_<YYYY-Www>.png   temperature + light + activity dashboard per week
+plots/calendar_heatmap.png   day × hour indoor and outdoor temperature
+plots/day_hour_maps.png      day × time-of-day (rows 03:00→03:00): indoor, outdoor, LED lux, sun/IR lux
+plots/indoor_outdoor_delta.png  indoor − outdoor gap by day × time of day + daily mean + median profile
+plots/daily_trends.png       daily range/mean + hours below / in / above comfort
+plots/spectrograms.png       per-feed spectrogram (period × time) + median spectrum
+plots/thermal_model.png      model fit (coupling, solar gain, overnight validation)
+plots/overnight_coast.png    nightly cooling curves + pre-heat guide
+plots/nightly_activity.png   lights-out / lamp / daylight per night
+explorer.html                zoomable plotly view (needs internet for the plotly CDN)
 ```
-analysis_output/
-  reports/
-    hvac_analysis_<start>_to_<end>_daily_summary.csv    per-day totals, coverage, τ
-    hvac_analysis_<start>_to_<end>_ac_events.csv        one row per detected cycle
-    hvac_analysis_<start>_to_<end>_period_stats.csv     slope stats per day × period
-    hvac_analysis_<start>_to_<end>_thermal_tau.csv      every fit, accepted or not
-    hvac_analysis_<start>_to_<end>_setpoint_raise.csv   the afternoon coast
-    hvac_analysis_<start>_to_<end>_report.txt           the terminal report
-  plots/
-    raw_full_record.png            whole record, events shaded, day boundaries
-    days_overlaid.png              all analysis days on one 03:00→03:00 axis
-    period_slope_summary.png       slope distributions + event counts by period
-    day_<date>_diagnostic.png      per-day trace + dT/dt with every fit drawn
-    day_<date>_cycle_detail.png    zoom on the deepest cycle - how slopes are measured
-    day_<date>_thermal_tau.png     τ fits with residuals and identifiability
+
+## Method
+
+**Thermal model.** This is the same equation the Level 2b firmware uses:
+
+```text
+dT/dt = K_COUPLE·(T_out − T) + K_SOLAR·log10(1 + sun_lux) + K_BIAS
 ```
+
+It is fitted on passive samples (|dT/dt| ≤ 0.08 °F/min, 31-min slope window) with
+a robust soft-L1 loss, and τ gets a day-block bootstrap CI. `summary.md` prints the
+coefficients as ready-to-paste `constexpr` lines. τ = 1/K_COUPLE is the time
+constant, and K_BIAS/K_COUPLE is how far above outdoor the apartment settles with
+no heat and no sun.
+
+**Overnight coast and pre-heat guide.** Each night from 22:00 to 06:00 is
+measured. The model is replayed from 22:00 with the real outdoor trace, and its
+error is reported in `pred_err_f`. The pre-heat guide inverts the model:
+`T_start = T∞ + (target − T∞)·e^(L/τ)`.
+
+**Activity.** The living-room "dark" threshold is learned from the night-time lux
+floor. The dark run covering 03:00 is treated as the lights-out window, with lamp
+blips under 10 min merged. Lamp use is only judged while the sun is down, because
+the LED/sun split is uncalibrated and sunlight leaks into `led_lux` by day. The
+sensor sits in the living room, so these times are a bedtime proxy.
+
+**Comfort band** is 65-80 °F. Days are local calendar days (America/New_York).
 
 ## Tuning
 
-Drop a `config.json` next to the script to override any default without
-editing code. Every key in `DEFAULT_CONFIG` is overridable, e.g.:
+Drop a `config.json` next to the scripts to override any key in
+`homesense/config.py` (top-level keys replace the default wholesale), e.g.:
 
 ```json
-{
-  "timezone": "America/New_York",
-  "cool_slope_on": 0.15,
-  "artifact_rise_f_per_min": 0.50,
-  "periods": {"night": [22, 5], "morning": [5, 10],
-              "afternoon": [10, 18], "evening": [18, 22]}
-}
+{"comfort_low_f": 66, "morning_targets_f": [66, 68], "sensor_sunlit_lux": 3000}
 ```
-
-The `--weather` flag pulls outdoor temperature from Open-Meteo (no key
-required) for a physically anchored τ, and overlays it on the full-record and
-per-day plots. It tries three sources in order and uses whichever answers
-first: 15-minute data (real HRRR-based resolution over the US, interpolated
-from hourly elsewhere), then hourly forecast data, then the hourly historical
-archive for anything older than the forecast API's lookback window. Each step
-fails soft - a bad response just falls through to the next one, and if all
-three come up empty the indoor-only estimate is reported alone, same as
-before `--weather` existed.
-
-When outdoor data is available, `daily_summary.csv` and the per-day table in
-the terminal report both add outdoor min/mean/max and the mean indoor−outdoor
-delta for that day.
-
-## Related
-
-`docs/HVAC_STATE_BUG.md` - why the `home-hvac-state` feed sat pinned at `1`,
-and the threshold calibration this analysis feeds back into the firmware.
