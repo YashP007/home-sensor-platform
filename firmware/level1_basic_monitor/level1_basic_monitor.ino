@@ -1,22 +1,13 @@
 /*
- * SmartHome Monitor — Level 1: Basic Environmental Monitor
+ * SmartHome Monitor — Level 1: Basic Monitor
  *
- * Reads temperature, humidity, and pressure from a BME280 sensor over I2C,
- * publishes to Adafruit IO every 30 seconds.
+ * Hardware bring-up check: reads temperature and humidity from a BME280 over
+ * I2C and publishes both to Adafruit IO every 30 seconds. If this runs, the
+ * board, sensor, WiFi and Adafruit IO account are all working.
  *
- * Hardware:
- *   - SmartHome Monitor PCB v13 (or any XIAO ESP32-C3 with a Qwiic BME280)
- *   - BME280 breakout connected to J3 or J4 via a Qwiic cable
- *
- * Setup:
- *   1. Copy `secrets_example.h` (from firmware/ root) to `secrets.h` in
- *      this directory. Populate with your credentials.
- *   2. Create the following feeds in the Adafruit IO dashboard:
- *        - home-temperature
- *        - home-humidity
- *        - home-pressure
- *   3. Install the required libraries listed in firmware/README.md.
- *   4. Board: XIAO_ESP32C3. Upload.
+ * Hardware : XIAO ESP32-C3 on the SmartHome Monitor PCB, BME280 on J3 or J4 (Qwiic)
+ * Libraries: Adafruit BME280, Adafruit Unified Sensor, Adafruit IO Arduino
+ * Setup    : copy ../secrets_example.h to ./secrets.h and fill in WiFi + Adafruit IO.
  */
 
 #include <Wire.h>
@@ -26,86 +17,68 @@
 #include "secrets.h"
 
 // ─── Configuration ──────────────────────────────────────────────────────
+// These are the living-room feeds that Level 2's main board also publishes
+// to. Flash Level 1 on that board, or point these at scratch feeds.
+#define FEED_TEMP  "home.home-temperature"
+#define FEED_HUMID "home.home-humidity"
 
-constexpr uint8_t   BME280_I2C_ADDR    = 0x77;   // Adafruit default; try 0x76 if not found
-constexpr uint32_t  PUBLISH_INTERVAL_MS = 30000;  // 30 seconds between publishes
-constexpr float     SEALEVEL_PRESSURE_HPA = 1013.25f;
+constexpr uint32_t PUBLISH_INTERVAL_MS   = 30000;
+constexpr uint32_t IO_CONNECT_TIMEOUT_MS = 60000;
 
 // ─── Globals ────────────────────────────────────────────────────────────
-
 Adafruit_BME280 bme;
 AdafruitIO_WiFi io(IO_USERNAME, IO_KEY, WIFI_SSID, WIFI_PASS);
-
-AdafruitIO_Feed *feedTemp  = io.feed(IO_FEED_TEMP);
-AdafruitIO_Feed *feedHumid = io.feed(IO_FEED_HUMID);
-AdafruitIO_Feed *feedPress = io.feed(IO_FEED_PRESS);
+AdafruitIO_Feed *feedTemp  = io.feed(FEED_TEMP);
+AdafruitIO_Feed *feedHumid = io.feed(FEED_HUMID);
 
 uint32_t lastPublishMs = 0;
 
 // ─── Setup ──────────────────────────────────────────────────────────────
-
 void setup() {
   Serial.begin(115200);
-  delay(2000);  // Allow serial monitor to attach before first print
-
-  Serial.println();
-  Serial.println("[BOOT] SmartHome Monitor Level 1 — Basic Monitoring");
+  delay(2000);                                    // let the serial monitor attach
+  Serial.println("\n[BOOT] SmartHome Monitor Level 1 — basic monitor");
 
   Wire.begin();
-
-  if (!bme.begin(BME280_I2C_ADDR, &Wire)) {
-    Serial.println("[BME]  ERROR: sensor not found at 0x77. Trying 0x76...");
-    if (!bme.begin(0x76, &Wire)) {
-      Serial.println("[BME]  ERROR: sensor not found at 0x76 either. Halting.");
-      while (1) { delay(1000); }
-    }
+  if (!bme.begin(0x77, &Wire) && !bme.begin(0x76, &Wire)) {
+    Serial.println("[BME]  ERROR: sensor not found at 0x77 or 0x76. Restarting in 10 s.");
+    delay(10000);
+    ESP.restart();
   }
+  // Temperature 2x, pressure off (unused), humidity 1x, IIR filter 16.
+  bme.setSampling(Adafruit_BME280::MODE_NORMAL,
+                  Adafruit_BME280::SAMPLING_X2, Adafruit_BME280::SAMPLING_NONE,
+                  Adafruit_BME280::SAMPLING_X1, Adafruit_BME280::FILTER_X16,
+                  Adafruit_BME280::STANDBY_MS_500);
   Serial.println("[BME]  Sensor initialized.");
 
-  // Indoor navigation preset: 16x pressure oversampling, 2x temp, 1x humidity, 16x IIR filter.
-  // Gives the most stable readings for a fixed indoor installation.
-  bme.setSampling(Adafruit_BME280::MODE_NORMAL,
-                  Adafruit_BME280::SAMPLING_X2,   // temperature
-                  Adafruit_BME280::SAMPLING_X16,  // pressure
-                  Adafruit_BME280::SAMPLING_X1,   // humidity
-                  Adafruit_BME280::FILTER_X16,
-                  Adafruit_BME280::STANDBY_MS_500);
-
-  Serial.print("[WIFI] Connecting to Adafruit IO");
+  Serial.print("[WIFI] Connecting");
   io.connect();
+  uint32_t t0 = millis();
   while (io.status() < AIO_CONNECTED) {
+    if (millis() - t0 > IO_CONNECT_TIMEOUT_MS) {
+      Serial.printf("\n[WIFI] ERROR: %s. Restarting.\n", io.statusText());
+      ESP.restart();
+    }
     Serial.print(".");
     delay(500);
   }
-  Serial.println();
-  Serial.print("[IO]   Connected: ");
-  Serial.println(io.statusText());
+  Serial.printf("\n[IO]   %s\n", io.statusText());
 }
 
 // ─── Main loop ──────────────────────────────────────────────────────────
-
 void loop() {
-  // Adafruit IO housekeeping — must be called every loop iteration.
-  io.run();
+  io.run();                                       // MQTT keep-alive; call every iteration
 
-  if (millis() - lastPublishMs < PUBLISH_INTERVAL_MS) return;
-  lastPublishMs = millis();
+  uint32_t now = millis();
+  if (lastPublishMs != 0 && now - lastPublishMs < PUBLISH_INTERVAL_MS) return;
+  lastPublishMs = now;
 
-  // Read all three channels. Adafruit's driver blocks briefly on each call.
-  float tempC     = bme.readTemperature();
-  float tempF     = tempC * 9.0f / 5.0f + 32.0f;
-  float humidity  = bme.readHumidity();
-  float pressure  = bme.readPressure() / 100.0f;  // Pa → hPa
+  float tempF    = bme.readTemperature() * 9.0f / 5.0f + 32.0f;
+  float humidity = bme.readHumidity();
+  Serial.printf("[LOOP] T=%.2fF  H=%.1f%%\n", tempF, humidity);
 
-  Serial.printf("[LOOP] T=%.2fC (%.2fF)  H=%.1f%%  P=%.1fhPa\n",
-                tempC, tempF, humidity, pressure);
-
-  // Publish to Adafruit IO. save() is non-blocking and queues the message.
-  if (feedTemp->save(tempF)   &&
-      feedHumid->save(humidity) &&
-      feedPress->save(pressure)) {
-    Serial.println("[IO]   Published successfully.");
-  } else {
-    Serial.println("[IO]   ERROR: publish failed. Check network connectivity.");
-  }
+  bool ok = feedTemp->save(tempF);
+  ok &= feedHumid->save(humidity);
+  Serial.println(ok ? "[IO]   Published." : "[IO]   ERROR: publish failed.");
 }
