@@ -6,7 +6,7 @@ Firmware for the SmartHome Monitor is organized as progressive tiers. Each tier 
 |---|---|
 | [Level 1 — Basic monitor](level1_basic_monitor/) | BME280 temperature + humidity to Adafruit IO. The hardware bring-up check |
 | [Level 2 — Room sensor](level2_room_sensor/) | The deployed firmware. One sketch, two roles: a living-room **main** board (BME280 + TSL2591 light + outdoor temperature) and a bedroom **peripheral** board (BME280) |
-| [Level 4 — Spotify album-art display](level4_future_spotify_display/) | Future work: design notes only |
+| [Level 3 — Spotify album-art display](level3_future_spotify_display/) | Future work: design notes only |
 
 Alongside the numbered tiers, `dev_*` directories hold work in progress toward the Spotify display. Each is a small, isolated proof of one piece of that pipeline, built and tested before the pieces are combined into a real sketch.
 
@@ -31,7 +31,7 @@ Install via the Arduino IDE Library Manager:
 | `Adafruit IO Arduino` | MQTT client for Adafruit IO | Level 1, 2 |
 | `Adafruit TSL2591 Library` | Ambient light sensor | Level 2 |
 | `ArduinoJson` (v7) | Open-Meteo / Spotify JSON parsing | Level 2, dev_spotifyMCU |
-| `FastLED` | WS2812B driver | Level 4 (future) |
+| `FastLED` | WS2812B driver | Level 3 (future) |
 
 Both Level 2 roles build from the same sketch, so install the full Level 2 set even for a peripheral-only board.
 

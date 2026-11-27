@@ -54,7 +54,7 @@ Net names are consistent between the schematic and layout: `VDD_5V`, `VDD_3V3`, 
 Current PCB revision: **v13**. Prior revisions were not fabricated — v13 is the first physical board. Earlier revisions in the design log addressed:
 
 - v1–v4: Initial layouts with QT Py ESP32-S3, revised to XIAO ESP32-C3 for cost.
-- v5–v7: Single barrel jack, then dual-input topology added after Level 4 (WS2812B) requirements were clarified.
+- v5–v7: Single barrel jack, then dual-input topology added after Level 3 (WS2812B) requirements were clarified.
 - v8: Schematic reorganized into functional blocks. Design decisions from earlier revisions consolidated here.
 - v9–v12: Layout iterations to fit within 50 × 45 mm target while maintaining ground plane integrity.
 - v13: Current release. First physical fabrication.

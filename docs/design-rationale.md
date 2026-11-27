@@ -8,11 +8,11 @@ The candidates were the Adafruit QT Py ESP32-S3, the Seeed XIAO ESP32-S3, and th
 
 **Chosen: XIAO ESP32-C3 (~$5.50).** For the sensing workload — a BME280 read every 5 seconds, a slope regression across a 12-sample buffer, and an MQTT publish to Adafruit IO — the C3's single-core RISC-V at 160 MHz operates at well under 5% CPU utilization. The 400 KB SRAM comfortably accommodates the WiFi + mbedTLS working set (~60 KB) with ample headroom for the application layer. WiFi is functionally equivalent to the S3 variants.
 
-**Rejected: QT Py ESP32-S3 (~$13.50).** The dual-core Xtensa architecture and onboard STEMMA QT connector are genuine advantages for compute-heavy workloads, particularly the future Spotify album-art display where TLS, JPEG decoding, and LED framebuffer streaming compete for CPU time. For the current sensing workload, however, the ~$8 price premium buys no functional improvement. The design is scoped to be C3-compatible for the sensor tiers; the Spotify tier will be documented as requiring an S3 or better if performance testing during Level 4 development confirms the C3 cannot service TLS and JPEG decode simultaneously.
+**Rejected: QT Py ESP32-S3 (~$13.50).** The dual-core Xtensa architecture and onboard STEMMA QT connector are genuine advantages for compute-heavy workloads, particularly the future Spotify album-art display where TLS, JPEG decoding, and LED framebuffer streaming compete for CPU time. For the current sensing workload, however, the ~$8 price premium buys no functional improvement. The design is scoped to be C3-compatible for the sensor tiers; the Spotify tier will be documented as requiring an S3 or better if performance testing during Level 3 development confirms the C3 cannot service TLS and JPEG decode simultaneously.
 
 **Rejected: XIAO ESP32-S3 (~$7.50).** Would have been the ideal compromise, offering dual-core performance at a modest price premium. Excluded from the current design because the C3 was already in inventory from a prior project; a future revision may standardize on the S3 variant for pin-compatible upgradability.
 
-The tradeoff to acknowledge: the C3 is single-core. If the Spotify tier proves infeasible on C3 during Level 4 development, the PCB will need a revision to swap the module footprint, since the XIAO C3 and S3 have pin-compatible castellations but different internal pin-to-GPIO mappings that affect firmware portability.
+The tradeoff to acknowledge: the C3 is single-core. If the Spotify tier proves infeasible on C3 during Level 3 development, the PCB will need a revision to swap the module footprint, since the XIAO C3 and S3 have pin-compatible castellations but different internal pin-to-GPIO mappings that affect firmware portability.
 
 ## Sensor selection — BME280 external, not on-board
 
@@ -48,7 +48,7 @@ Several features were considered and rejected. Documenting the exclusions is as 
 
 **Battery charging circuit.** A MCP73831 single-cell LiPo charger with a JST-PH battery connector would have added ~50 mm² of board area and $1 in BOM. Rejected because the device is a permanent wall-mounted installation; portability is not a requirement, and the wall adapter is more reliable than any battery over multi-year operation.
 
-**On-board level shifter for WS2812B data line.** A SN74LVC1T45 would translate the XIAO's 3.3V data output to 5V logic levels compliant with the WS2812B datasheet. Rejected because the ESP32's fast rise times reliably drive WS2812Bs at 3.3V over short cables in practice, despite technically violating the datasheet's 0.7 × VDD threshold. Empirical testing during Level 4 development will confirm; if unreliable, a level shifter will be added in v1.1.
+**On-board level shifter for WS2812B data line.** A SN74LVC1T45 would translate the XIAO's 3.3V data output to 5V logic levels compliant with the WS2812B datasheet. Rejected because the ESP32's fast rise times reliably drive WS2812Bs at 3.3V over short cables in practice, despite technically violating the datasheet's 0.7 × VDD threshold. Empirical testing during Level 3 development will confirm; if unreliable, a level shifter will be added in v1.1.
 
 **Real-time clock.** A DS3231 would preserve time across power loss. Rejected because the ESP32-C3's WiFi-native NTP client synchronizes time within seconds of boot at zero BOM cost. An RTC would be relevant only for offline operation, which is out of scope.
 

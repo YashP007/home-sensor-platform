@@ -6,7 +6,7 @@ The board has two DC barrel jacks (J1, J2), joined at the 5V rail through an SS3
 
 The base sensing platform draws under 100 mA continuous — WiFi transmit peaks at ~250 mA, the BME280 draws under 1 mA, and Qwiic accessories rarely exceed 20 mA each. A single 5V/1A supply is more than adequate for this workload, and a single-input design would have been simpler.
 
-The complication is the Level 4 target: a WS2812B 22×22 matrix (484 LEDs) intended to display Spotify album art on the same board. This matrix draws up to 4A at 5V during high-brightness content, with fast pulsed current characteristics as the WS2812B's internal PWM cycles. Sharing a single 5V rail between a high-current pulsed load and analog sensor circuitry creates two problems:
+The complication is the Level 3 target: a WS2812B 22×22 matrix (484 LEDs) intended to display Spotify album art on the same board. This matrix draws up to 4A at 5V during high-brightness content, with fast pulsed current characteristics as the WS2812B's internal PWM cycles. Sharing a single 5V rail between a high-current pulsed load and analog sensor circuitry creates two problems:
 
 1. **Voltage sag on the sensor rail during LED transients.** A 4A current pulse across the resistance of PCB traces, connector contact resistance, and the wall adapter's output impedance produces measurable dips on the 5V rail. The BME280 tolerates supply variation gracefully, but the XIAO's onboard 3.3V LDO propagates enough of the sag to affect ADC references, biasing the thermistor and light sensor readings.
 
@@ -39,11 +39,11 @@ The SS34 Schottky (D1) prevents backfeed between the two supplies. If the user p
 
 ## Practical operating modes
 
-**Level 1–3 (sensing only):** Power J1 with a single 5V/1A wall adapter. J2 remains unconnected. Total system current is under 300 mA peak.
+**Level 1–2 (sensing only):** Power J1 with a single 5V/1A wall adapter. J2 remains unconnected. Total system current is under 300 mA peak.
 
-**Level 4 (matrix + sensing):** Power J1 with a 5V/1A adapter for the logic domain, and J2 with a separate 5V/5A adapter for the matrix. This preserves clean analog measurements while providing the current headroom for the LEDs. Total load is bounded by the matrix's software-capped brightness limit (`FastLED.setMaxPowerInVoltsAndMilliamps()`).
+**Level 3 (matrix + sensing):** Power J1 with a 5V/1A adapter for the logic domain, and J2 with a separate 5V/5A adapter for the matrix. This preserves clean analog measurements while providing the current headroom for the LEDs. Total load is bounded by the matrix's software-capped brightness limit (`FastLED.setMaxPowerInVoltsAndMilliamps()`).
 
-**Level 4 alternate (single supply):** Power J1 only with a 5V/5A adapter, leaving J2 unconnected. This works but analog sensor readings will be measurably noisier during high-brightness LED content. Acceptable for a display-primary use case where sensor accuracy is secondary.
+**Level 3 alternate (single supply):** Power J1 only with a 5V/5A adapter, leaving J2 unconnected. This works but analog sensor readings will be measurably noisier during high-brightness LED content. Acceptable for a display-primary use case where sensor accuracy is secondary.
 
 ## Bulk capacitance placement
 
