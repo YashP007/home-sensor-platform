@@ -34,39 +34,41 @@ SmartHome-Monitor/
 │   └── enclosure/                  — STL files (WIP)
 ├── manufacturing/
 │   ├── HomeTemp_PCB v12_2026-07-11.zip		— full PCB manufacturing files (copper, DRL, Silkscreen, etc)
+├── collected-data/                — Adafruit IO export analysis (homesense package)
 └── firmware/
-    ├── secrets_example.h           — credential template
-    ├── level1_basic_monitor/       — BME280 → Adafruit IO
-    ├── level2_hvac_inference/      — slope-based HVAC state detection
-    ├── level3_expandable_platform/ — Qwiic + thermistor + light sensor
-    └── level4_future_spotify_display/ — planned WS2812B integration
+    ├── secrets_example.h           — credential + per-board settings template
+    ├── level1_basic_monitor/       — BME280 → Adafruit IO bring-up check
+    ├── level2_room_sensor/         — multi-room firmware: living-room main + bedroom peripheral
+    ├── level3_future_spotify_display/ — planned WS2812B album-art display
+    └── dev_spotifyAPI/, dev_spotifyMCU/ — stepping stones toward Level 3
 ```
 
 ## Project tiers
 
-The firmware is organized as four progressive tiers, each a working codebase demonstrating a distinct level of hardware-software integration.
-### Level 1 — Basic environmental monitor
+The firmware is organized as progressive tiers, each a working sketch on the same PCB.
 
-BME280 read over I2C, published to Adafruit IO at a fixed interval. Approximately 60 lines of code. This is the "does the hardware work end-to-end" checkpoint. See [`firmware/level1_basic_monitor/`](firmware/level1_basic_monitor/).
+### Level 1 — Basic monitor
 
-### Level 2 — HVAC state inference
+BME280 temperature and humidity published to Adafruit IO every 30 s. This is the "does the hardware work end-to-end" checkpoint. See [`firmware/level1_basic_monitor/`](firmware/level1_basic_monitor/).
 
-Adds temperature slope regression over a rolling window to infer whether HVAC is currently heating, cooling, or idle. Includes dead-zone hysteresis to prevent false transitions from noise. Demonstrates that the sensor upgrade from DHT11 to BME280 enables inference the original hardware could not support. See [`firmware/level2_hvac_inference/`](firmware/level2_hvac_inference/).
+### Level 2 — Multi-room room sensor
 
-### Level 3 — Multi-modal expandable platform
+The deployed firmware. One sketch runs on every board, and a `DEVICE_ROLE` setting picks the board's job. The living-room **main** board adds a TSL2591 light sensor, split into lamp light and sunlight by its IR fraction, plus outdoor temperature from Open-Meteo. The bedroom **peripheral** board reads its BME280 only. Both boards publish independently and fit inside the Adafruit IO free tier together (9 of 10 feeds, well under 30 messages/min) by packing diagnostics into one text feed per board. See [`firmware/level2_room_sensor/`](firmware/level2_room_sensor/).
 
-Extends Level 2 with a Qwiic sensor discovery routine, an ambient light channel via VEML7700, and an analog thermistor input for the resistive divider. Structured so that adding a new I2C sensor requires modifying a single function. See [`firmware/level3_expandable_platform/`](firmware/level3_expandable_platform/).
+### Level 3 — Spotify album-art display (future work)
 
-### Level 4 — Spotify album-art display (future work)
+Reuses the same PCB with a WS2812B matrix on the 3-pin JST connector: OAuth 2.0 against Spotify's Web API, JPEG decode, and downsampling to the matrix. See [`firmware/level3_future_spotify_display/`](firmware/level3_future_spotify_display/).
 
-Reuses the same PCB with a WS2812B 16x16 matrix connected via the 3-pin JST connector. OAuth 2.0 flow against Spotify's Web API, JPEG decode, and downsample to LEX matrix resolution. Noted as a roadmap for future work because the OAuth and TLS overhead is substantially more implementation work than the sensing tiers. See [`firmware/level4_future_spotify_display/`](firmware/level4_future_spotify_display/).
+### Data analysis
+
+[`collected-data/`](collected-data/) turns Adafruit IO CSV exports into weekly dashboards, room comparisons, a passive thermal model of the apartment, board health, and a suggested light-sensor calibration.
 
 ## Hardware summary
 
 | Attribute | Value |
 |---|---|
 | MCU | Seeed XIAO ESP32-C3 (RISC-V, 160 MHz, WiFi + BLE) |
-| Primary sensor | BME280 (I2C, external via Qwiic) |
+| Sensors | BME280 temperature/humidity; TSL2591 light on the main board (both I2C via Qwiic) |
 | Board dimensions | ~50 × 45 mm (2.25 in²) |
 | Power inputs | Dual 5.5×2.1mm barrel jacks (5V logic, 5V matrix) |
 | Expansion | 2× SparkFun Qwiic (JST-SH), 1× 3-pin JST-SM (WS2812B), 2-pin thermistor header, breadboard-friendly I2C THT pads |
@@ -79,8 +81,9 @@ Full component list, source, and rationale in [`hardware/BOM.csv`](hardware/BOM.
 1. Print the enclosure files from `hardware/enclosure/` — see [`docs/enclosure-design.md`](docs/enclosure-design.md) for orientation.
 2. Order the PCB from Gerber files (not in this repo — export from your CAD tool of choice) and assemble per [`docs/assembly-guide.md`](docs/assembly-guide.md).
 3. Connect a BME280 breakout (Adafruit or SparkFun Qwiic) to J3 or J4.
-4. Copy `firmware/secrets_example.h` to `firmware/secrets.h` and populate with your WiFi and Adafruit IO credentials. **This file is gitignored — never commit it.**
+4. Copy `firmware/secrets_example.h` to `secrets.h` next to the sketch you are flashing and fill in your WiFi and Adafruit IO credentials. **This file is gitignored — never commit it.**
 5. Open `firmware/level1_basic_monitor/level1_basic_monitor.ino` in Arduino IDE, select "XIAO_ESP32C3" as the board, upload.
+6. Once Level 1 publishes, flash [Level 2](firmware/level2_room_sensor/) to each board with the right `DEVICE_ROLE`.
 
 ## Design decisions worth reading
 

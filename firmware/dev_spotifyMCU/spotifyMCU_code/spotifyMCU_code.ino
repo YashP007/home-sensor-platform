@@ -7,7 +7,7 @@
  * currently playing, dumping the album art out over serial so you can
  * check it landed intact. Still not the real display firmware - no JPEG
  * decode, no LED matrix - just the network + auth side proven out first.
- * See ../../level4_future_spotify_display/README.md for the bigger picture.
+ * See ../../level3_future_spotify_display/README.md for the bigger picture.
  *
  * The refresh token isn't generated here. Run the desktop script once:
  *     cd ../dev_spotifyAPI
@@ -312,7 +312,7 @@ void fetchAndDumpImageFromUrl(const String &url) {
   WiFiClientSecure client;
   // bring-up only: skipping cert validation so we can prove the HTTP path
   // works before spending time on a real root CA bundle. don't ship this -
-  // see level4_future_spotify_display/README.md for what that'd take.
+  // see level3_future_spotify_display/README.md for what that'd take.
   client.setInsecure();
   client.setTimeout(HTTP_TIMEOUT_MS);
 

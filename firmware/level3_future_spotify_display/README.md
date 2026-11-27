@@ -1,4 +1,4 @@
-# Level 4 — Spotify Album-Art Display (Future Work)
+# Level 3 — Spotify Album-Art Display (Future Work)
 
 **Status: not implemented.** This directory contains the design plan for a firmware tier that will reuse the SmartHome Monitor PCB to drive a WS2812B 22×22 LED matrix displaying the album art of the currently-playing Spotify track.
 
@@ -33,7 +33,7 @@ The Spotify project is the single strongest argument for a v1.1 board revision t
 
 The plan is:
 
-1. Attempt Level 4 on the current C3-based board. If it works reliably, ship it as-is.
+1. Attempt Level 3 on the current C3-based board. If it works reliably, ship it as-is.
 2. If reliability is poor (WiFi disconnections during JPEG decode, TLS handshake failures under load, framebuffer glitches during network activity), design a v1.1 board with the pin-compatible XIAO ESP32-S3 module and migrate firmware.
 
 Deferring the S3 migration until after empirical testing avoids over-engineering — the C3 may be adequate.
@@ -45,13 +45,13 @@ Based on similar projects documented elsewhere and my own experience level:
 | Phase | Estimate |
 |---|---|
 | Spotify developer account setup, OAuth comprehension | 4–6 hours |
-| Level 1 Spotify — current song title to serial monitor | 8–12 hours |
-| Level 2 Spotify — album art fetched and decoded to serial output | 6–8 hours |
-| Level 3 Spotify — matrix display integration | 4–6 hours |
+| Phase 1 — current song title to serial monitor | 8–12 hours |
+| Phase 2 — album art fetched and decoded to serial output | 6–8 hours |
+| Phase 3 — matrix display integration | 4–6 hours |
 | Testing, calibration, edge cases | 8–12 hours |
 | **Total** | **30–44 hours** |
 
-This is why the tier is called "future work" — it is a project of comparable scope to the entire Level 1–3 sensor tiers combined.
+This is why the tier is called "future work" — it is a project of comparable scope to the entire Level 1–2 sensing tiers combined.
 
 ## References
 

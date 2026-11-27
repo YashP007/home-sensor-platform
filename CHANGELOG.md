@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — 2026-11 — Multi-room firmware
+
+### Firmware
+- **Level 2 — Room sensor** (`level2_room_sensor/`) replaces Level 2b. One sketch, two roles chosen by `DEVICE_ROLE` in `secrets.h`: a living-room main board (BME280, TSL2591 sun/LED light split, Open-Meteo outdoor temperature) and a bedroom peripheral board (BME280).
+- Fits the Adafruit IO free tier across both boards: change-triggered numeric feeds plus one packed `key=value` status text feed per board (uptime, RSSI, free heap, raw TSL2591 counts).
+- Lux is published with a 0.01 floor so Adafruit IO log-scale charts no longer break on dark readings.
+- Level 1 publishes temperature and humidity only, keeps feed keys in the sketch, and restarts instead of halting on sensor or connection faults.
+- Spotify display tier renumbered from Level 4 to Level 3.
+
+### Removed
+- HVAC state inference (old Level 2 and the Level 2b detectors / drift compensation). It never produced a usable signal on this hardware.
+- Level 3 VEML7700 + thermistor tier, which targeted sensors the deployed boards do not have.
+- Pressure publishing.
+
+### Analysis
+- `collected-data/` homesense package: multi-feed dashboards, thermal model, overnight coast / pre-heat guide, light-based activity.
+- Multi-room support (bedroom feeds), status-feed parsing, board health, and suggested `R_SUN` / `R_LED`.
+
 ## [v1.0] — 2026-07 — Initial PCB release
 
 ### Hardware
@@ -15,8 +33,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Firmware
 - **Level 1** — BME280 environmental data published to Adafruit IO at a fixed interval.
-- **Level 2** — HVAC state inference using rolling temperature slope regression with dead-zone hysteresis. Ported from earlier DHT11 breadboard prototype; benefits from BME280's improved resolution.
-- **Level 3** — Multi-modal expansion with VEML7700 ambient light, thermistor divider read, and I2C bus scan for connected Qwiic sensors.
+- **Level 2** — HVAC state inference using rolling temperature slope regression with dead-zone hysteresis (removed in Unreleased).
+- **Level 3** — Multi-modal expansion with VEML7700 ambient light, thermistor divider read, and I2C bus scan (removed in Unreleased).
 
 ### Documentation
 - Design rationale for MCU, sensor, and power topology choices.
@@ -36,6 +54,5 @@ All notable changes to this project are documented here. The format follows [Kee
 - Add silkscreen indicators for barrel jack polarity.
 
 ### Firmware
-- **Level 4** — Spotify album-art display via WS2812B matrix. Requires OAuth 2.0 flow, TLS to `api.spotify.com`, JPEG decode, and 64→22 downsample.
-- Migrate from `delay()`-based scheduling to a cooperative task scheduler.
-- Add persistent storage for HVAC inference calibration parameters (currently hardcoded).
+- **Level 3** — Spotify album-art display via WS2812B matrix. Requires OAuth 2.0 flow, TLS to `api.spotify.com`, JPEG decode, and 64→22 downsample.
+- Store the light-split calibration (`R_SUN` / `R_LED`) in NVS instead of hardcoding it.

@@ -1,8 +1,8 @@
 # dev_spotifyAPI — Spotify Web API harness
 
-Desktop scaffolding for the [Level 4](../level4_future_spotify_display/) album-art display. The goal is to work out the OAuth 2.0 handshake and the currently-playing poll loop somewhere you have a debugger, a filesystem, and legible error messages — then port the working request/response shapes to the ESP32-C3.
+Desktop scaffolding for the [Level 3](../level3_future_spotify_display/) album-art display. The goal is to work out the OAuth 2.0 handshake and the currently-playing poll loop somewhere you have a debugger, a filesystem, and legible error messages — then port the working request/response shapes to the ESP32-C3.
 
-Per the Level 4 estimate, "Spotify developer account setup, OAuth comprehension" is a 4–6 hour phase. This directory is that phase.
+Per the Level 3 estimate, "Spotify developer account setup, OAuth comprehension" is a 4–6 hour phase. This directory is that phase.
 
 Nothing here is compiled or flashed. Python 3.8+ standard library only, no `pip install`.
 
@@ -30,7 +30,7 @@ Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
 | Redirect URI | `http://127.0.0.1:8888/callback` |
 | Which API/SDKs | Check **Web API** only |
 
-**The redirect URI is where this goes wrong.** Spotify's [27 November 2025 OAuth migration](https://developer.spotify.com/blog/2025-10-14-reminder-oauth-migration-27-nov-2025) removed support for the implicit grant flow, plain `http://` redirect URIs, and — the one that bites — the hostname `localhost`. Every tutorial written before 2025, including the SparkFun one referenced in the Level 4 README, tells you to use `http://localhost:8888/callback`. That now fails.
+**The redirect URI is where this goes wrong.** Spotify's [27 November 2025 OAuth migration](https://developer.spotify.com/blog/2025-10-14-reminder-oauth-migration-27-nov-2025) removed support for the implicit grant flow, plain `http://` redirect URIs, and — the one that bites — the hostname `localhost`. Every tutorial written before 2025, including the SparkFun one referenced in the Level 3 README, tells you to use `http://localhost:8888/callback`. That now fails.
 
 The current rules:
 
@@ -59,7 +59,7 @@ Paste the Client ID into `secrets.env`.
 
 The authoritative test of player access is to call a player endpoint: run `now` with music playing. If a track comes back, you have access.
 
-Reading and *controlling* playback differ here. `GET /me/player/currently-playing` works on free accounts. The write endpoints — play, pause, skip, seek — require Premium. Level 4 only reads, so this is not a constraint for this project.
+Reading and *controlling* playback differ here. `GET /me/player/currently-playing` works on free accounts. The write endpoints — play, pause, skip, seek — require Premium. Level 3 only reads, so this is not a constraint for this project.
 
 Separately, a new app starts in **Development Mode**, which limits it to accounts you explicitly allow-list. Your own account is added automatically. If you later test against a second account, add it under **Settings → User Management**, or calls fail with 403.
 
@@ -190,7 +190,7 @@ Run `--verbose` and copy the request shapes. The mapping:
 | Local callback server | `WebServer` on the ESP32, *or* run `auth` here once and flash the refresh token — see below |
 | Trusted CA bundle | `WiFiClientSecure::setCACert()`, or `setInsecure()` for bring-up only |
 
-One shortcut worth considering: the Level 4 README notes that running a callback web server and an outbound TLS client simultaneously is awkward on the C3. You can sidestep that entirely for v1 by running `auth` on the desktop once, then flashing the resulting refresh token into NVS. The device then only ever needs the outbound `grant_type=refresh_token` call — no inbound server, no browser, and a meaningfully smaller memory footprint. Re-authorization becomes a manual step, but it is a step you take approximately never.
+One shortcut worth considering: the Level 3 README notes that running a callback web server and an outbound TLS client simultaneously is awkward on the C3. You can sidestep that entirely for v1 by running `auth` on the desktop once, then flashing the resulting refresh token into NVS. The device then only ever needs the outbound `grant_type=refresh_token` call — no inbound server, no browser, and a meaningfully smaller memory footprint. Re-authorization becomes a manual step, but it is a step you take approximately never.
 
 ## References
 

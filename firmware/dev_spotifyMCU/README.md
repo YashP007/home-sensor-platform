@@ -3,7 +3,7 @@
 Gets the XIAO ESP32-C3 actually talking to Spotify - refreshing a token,
 polling what's playing, pulling the album art over HTTPS - without any of
 the JPEG decode or LED matrix work yet. That's still ahead of us; see
-[Level 4](../level4_future_spotify_display/) for the full plan.
+[Level 3](../level3_future_spotify_display/) for the full plan.
 
 Started as just an HTTPS image fetch test (proving TLS + GET even worked on
 this chip before dragging OAuth into it). That test mode is still in there -
@@ -95,7 +95,7 @@ on the desktop side.
 - `client.setInsecure()` skips certificate validation on every HTTPS call.
   Fine for proving the path works, but it needs a real root CA bundle
   before this goes anywhere near a device that isn't sitting on your desk.
-  See the Level 4 README for what that involves.
+  See the Level 3 README for what that involves.
 - The refresh token lives in `secrets.h` at flash time and gets copied into
   NVS (via `Preferences`) on first boot. If Spotify rotates it during a
   refresh, the new one gets saved back to NVS automatically - but if you
