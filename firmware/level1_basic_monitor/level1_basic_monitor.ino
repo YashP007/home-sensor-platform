@@ -57,13 +57,13 @@ void setup() {
   uint32_t t0 = millis();
   while (io.status() < AIO_CONNECTED) {
     if (millis() - t0 > IO_CONNECT_TIMEOUT_MS) {
-      Serial.printf("\n[WIFI] ERROR: %s. Restarting.\n", io.statusText());
+      Serial.printf("\n[WIFI] ERROR: %s. Restarting.\n", reinterpret_cast<const char *>(io.statusText()));
       ESP.restart();
     }
     Serial.print(".");
     delay(500);
   }
-  Serial.printf("\n[IO]   %s\n", io.statusText());
+  Serial.printf("\n[IO]   %s\n", reinterpret_cast<const char *>(io.statusText()));
 }
 
 // ─── Main loop ──────────────────────────────────────────────────────────

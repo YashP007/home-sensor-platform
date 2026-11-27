@@ -1,64 +1,67 @@
 # Firmware
 
-Firmware for the SmartHome Monitor is organized as four progressive tiers. Each tier is a self-contained Arduino sketch that compiles and runs independently on the same hardware. Higher tiers add capability without breaking the interface established by lower tiers.
+Firmware for the SmartHome Monitor is organized as progressive tiers. Each tier is a self-contained Arduino sketch that compiles and runs on the same hardware.
 
-Alongside the numbered tiers, `dev_*` directories hold work in progress toward Level 4 - small, isolated proofs of one piece of the pipeline (the Spotify API, the HTTPS image fetch) built and tested before they're combined into a real sketch.
+| Tier | What it does |
+|---|---|
+| [Level 1 — Basic monitor](level1_basic_monitor/) | BME280 temperature + humidity to Adafruit IO. The hardware bring-up check |
+| [Level 2 — Room sensor](level2_room_sensor/) | The deployed firmware. One sketch, two roles: a living-room **main** board (BME280 + TSL2591 light + outdoor temperature) and a bedroom **peripheral** board (BME280) |
+| [Level 4 — Spotify album-art display](level4_future_spotify_display/) | Future work: design notes only |
+
+Alongside the numbered tiers, `dev_*` directories hold work in progress toward the Spotify display. Each is a small, isolated proof of one piece of that pipeline, built and tested before the pieces are combined into a real sketch.
 
 ## Common setup
 
-All firmware tiers share a common credentials file. Before compiling any tier:
+Every tier reads credentials from a `secrets.h` next to the sketch:
 
-1. Copy `secrets_example.h` to `secrets.h` in the same directory as the sketch you are compiling.
-2. Populate `secrets.h` with your WiFi SSID, WiFi password, Adafruit IO username, and Adafruit IO key.
-3. Verify `secrets.h` appears in `.gitignore` — it should never be committed.
+1. Copy `secrets_example.h` to `secrets.h` in the directory of the sketch you are compiling.
+2. Fill in your WiFi SSID and password, and your Adafruit IO username and key. For Level 2, also set `DEVICE_ROLE` and the outdoor location.
+3. `secrets.h` is gitignored. Never commit it.
 
-Your Adafruit IO key grants full write access to your account. Treat it like a password. If you accidentally commit it, rotate the key immediately from the Adafruit IO dashboard.
+Your Adafruit IO key grants full write access to your account. Treat it like a password. If you accidentally commit it, rotate the key from the Adafruit IO dashboard immediately.
 
 ## Required Arduino libraries
 
 Install via the Arduino IDE Library Manager:
 
-| Library | Purpose | Used by tiers |
+| Library | Purpose | Used by |
 |---|---|---|
-| `Adafruit BME280 Library` | BME280 driver | 1, 2, 3 |
-| `Adafruit Unified Sensor` | Sensor abstraction base | 1, 2, 3 |
-| `Adafruit IO Arduino` | MQTT client for Adafruit IO | 1, 2, 3 |
-| `Adafruit VEML7700 Library` | Ambient light sensor | 3 |
-| `FastLED` | WS2812B driver | 4 (future) |
-| `ArduinoJson` | JSON parsing (Spotify API responses) | 4 (future), dev_spotifyMCU |
+| `Adafruit BME280 Library` | BME280 driver | Level 1, 2 |
+| `Adafruit Unified Sensor` | Sensor abstraction base | Level 1, 2 |
+| `Adafruit IO Arduino` | MQTT client for Adafruit IO | Level 1, 2 |
+| `Adafruit TSL2591 Library` | Ambient light sensor | Level 2 |
+| `ArduinoJson` (v7) | Open-Meteo / Spotify JSON parsing | Level 2, dev_spotifyMCU |
+| `FastLED` | WS2812B driver | Level 4 (future) |
 
-Board support: install "esp32" by Espressif Systems via the Boards Manager (Additional URLs: `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`). Select "XIAO_ESP32C3" as the target.
+Both Level 2 roles build from the same sketch, so install the full Level 2 set even for a peripheral-only board.
 
-`dev_spotifyMCU` only needs ArduinoJson on top of the board package - `WiFiClientSecure`, `HTTPClient`, `Preferences`, and `mbedtls/base64.h` all ship with it already.
+Board support: install "esp32" by Espressif Systems via the Boards Manager (Additional URLs: `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`). Select "XIAO_ESP32C3" as the target. Tested with esp32 core 3.3.12.
 
-## Tier overview
+`dev_spotifyMCU` only needs ArduinoJson on top of the board package. `WiFiClientSecure`, `HTTPClient`, `Preferences` and `mbedtls/base64.h` all ship with it.
 
-### [Level 1 — Basic monitor](level1_basic_monitor/)
-Approximately 80 lines. BME280 read every 5 seconds, published to Adafruit IO. This is the "does the hardware work" checkpoint. If Level 1 does not run, no higher tier will run.
+## Adafruit IO free tier
 
-### [Level 2 — HVAC state inference](level2_hvac_inference/)
-Approximately 200 lines. Adds a rolling temperature buffer, slope regression, and dead-zone hysteresis to detect whether HVAC is heating, cooling, or idle. Publishes both raw sensor data and the inferred state to separate Adafruit IO feeds.
+The free tier allows **10 feeds** and **30 messages per minute**, shared by every board on the account. Level 2 is designed around this limit: both boards together use 9 feeds and well under 30 messages/min. Diagnostics are packed into a single text feed per board instead of one feed each. See [Level 2 — Adafruit IO feeds](level2_room_sensor/README.md#adafruit-io-feeds).
 
-### [Level 3 — Multi-modal expandable platform](level3_expandable_platform/)
-Approximately 350 lines. Adds VEML7700 ambient light reading, thermistor divider ADC, and an I2C bus scan at startup that logs any Qwiic devices found. Structured with a per-sensor abstraction so that adding a new I2C sensor requires modifying one function.
+Free-tier data is kept for 30 days. Export the feeds to CSV at least every few weeks, and analyse them with [`collected-data/`](../collected-data/).
 
-### [Level 4 — Spotify album-art display](level4_future_spotify_display/) (future work)
-Roadmap only — no firmware yet. Describes the OAuth 2.0 flow, TLS requirements, and JPEG decode pipeline that will drive the WS2812B matrix.
+## Spotify display stepping stones
 
-## Level 4 stepping stones
-
-Level 4 is a lot to get right in one sketch - OAuth, TLS, JSON, JPEG decode, and LED output all at once. These `dev_*` directories isolate one piece at a time and get it working on its own first.
+The Spotify display is a lot to get right in one sketch: OAuth, TLS, JSON, JPEG decode and LED output all at once. These directories isolate one piece at a time and get it working on its own first.
 
 ### [dev_spotifyAPI](dev_spotifyAPI/)
-Desktop Python harness for the Spotify Web API: OAuth 2.0 + PKCE, polling `currently-playing`, downloading album art. No hardware involved - the point is to work out the API contract somewhere with a debugger before porting request shapes to the ESP32.
+
+Desktop Python harness for the Spotify Web API: OAuth 2.0 + PKCE, polling `currently-playing`, downloading album art. No hardware involved. The point is to work out the API contract somewhere with a debugger before porting request shapes to the ESP32.
 
 ### [dev_spotifyMCU](dev_spotifyMCU/)
-The XIAO ESP32-C3 authenticates against Spotify (refresh-token flow, no client secret, no on-device browser step), polls `currently-playing`, and fetches the album art over HTTPS when the track changes. No JPEG decode or LED output yet - the art is dumped over serial and reconstructed on the desktop side to confirm the round trip works before either of those get built.
+
+The XIAO ESP32-C3 authenticates against Spotify (refresh-token flow, no client secret, no on-device browser step), polls `currently-playing`, and fetches the album art over HTTPS when the track changes. No JPEG decode or LED output yet. The art is dumped over serial and reconstructed on the desktop to confirm the round trip works before either of those gets built.
 
 ## Coding conventions
 
-- Global constants in `ALL_CAPS_WITH_UNDERSCORES`.
-- Serial output is tagged with a bracketed subsystem identifier: `[WIFI]`, `[IO]`, `[BME]`, `[HVAC]`, `[LOOP]`.
+- Global constants in `ALL_CAPS_WITH_UNDERSCORES`. Feed keys are `#define`d at the top of each sketch, with the group prefix (`home.home-temperature`).
+- `secrets.h` holds credentials and per-board settings only.
+- Serial output is tagged with a bracketed subsystem identifier: `[BOOT]`, `[WIFI]`, `[IO]`, `[BME]`, `[TSL]`, `[WX]`, `[LOOP]`.
 - No `delay()` in the main loop. All timing uses `millis()` comparisons.
-- Every network call is guarded by a connectivity check and a timeout.
-- The Adafruit IO `io.run()` call is invoked on every loop iteration.
+- Every network call is guarded by a connectivity check and a timeout. A board that cannot reach its sensor or Adafruit IO restarts instead of halting.
+- `io.run()` is called on every loop iteration.
