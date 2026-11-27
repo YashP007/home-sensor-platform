@@ -7,7 +7,7 @@ import os
 
 import pandas as pd
 
-from . import activity, io, metrics, plots, report, thermal
+from . import activity, devices, io, metrics, plots, report, thermal
 from .util import local_time
 
 OUTPUT_PATTERNS = ["summary.md", "summary.json", "explorer.html", "data/*.csv", "plots/*.png",
@@ -88,7 +88,12 @@ def run(mode: str, args, cfg: dict, script_dir: str) -> int:
     daily = metrics.daily_table(df, nights, cfg)
     weekly = metrics.weekly_table(daily)
     health_df = metrics.health_table(health, df)
-    flags = metrics.build_flags(daily, nights, coast, model, forecast, health_df, df, cfg)
+    status = io.load_status(raw_dir, cfg)
+    if not status.empty:
+        status = status[(status["ts"] >= start) & (status["ts"] <= end)]
+    dev = devices.health(status) if not status.empty else pd.DataFrame()
+    calib = devices.light_calibration(status, cfg) if not status.empty else {}
+    flags = metrics.build_flags(daily, nights, coast, model, forecast, health_df, df, cfg, dev, calib)
 
     # one row per night: light-based activity joined with the thermal coast
     if not nights.empty and not coast.empty:
@@ -113,6 +118,7 @@ def run(mode: str, args, cfg: dict, script_dir: str) -> int:
     csv("preheat_guide.csv", guide)
     csv("hourly_timeseries.csv", report.hourly_table(df))
     csv("data_health.csv", health_df)
+    csv("device_status.csv", status)
     csv("flags.csv", pd.DataFrame(flags))
 
     label = "temperature-only history" if mode == "legacy" else "multi-feed"
@@ -166,7 +172,7 @@ def run(mode: str, args, cfg: dict, script_dir: str) -> int:
 
     report.write_summary(outdir, {"mode": mode, "cfg": cfg, "df": df, "daily": daily, "weekly": weekly,
                                   "nights": nights_all, "model": model, "guide": guide, "forecast": forecast,
-                                  "flags": flags, "health": health_df, "files": ["summary.md", "summary.json"] + files})
+                                  "flags": flags, "health": health_df, "devices": dev, "calib": calib, "files": ["summary.md", "summary.json"] + files})
     print(f"[out]  {len(files) + 2} files written to {outdir}")
     for f in flags:
         if f["severity"] in ("critical", "warning"):

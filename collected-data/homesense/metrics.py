@@ -37,6 +37,18 @@ def daily_table(df: pd.DataFrame, nights: pd.DataFrame, cfg: dict) -> pd.DataFra
         raw = g["indoor_raw_f"] if "indoor_raw_f" in g else t
         row = {"date": day, "weekday": pd.Timestamp(day).day_name()[:3],
                "coverage_pct": 100 * raw.notna().sum() / day_len}
+        if "bedroom_f" in g and g["bedroom_f"].notna().any():
+            b = g["bedroom_f"]
+            row.update({"bedroom_mean_f": b.mean(), "bedroom_min_f": b.min(), "bedroom_max_f": b.max(),
+                        "bedroom_min_at": f"{b.idxmin():%H:%M}",
+                        "bedroom_hours_below_comfort": (b < lo).sum() / 60,
+                        "bedroom_hours_above_comfort": (b > hi).sum() / 60,
+                        "living_minus_bedroom_f": (t - b).mean()})
+            if "night" in cfg["periods"]:
+                v = b[period.loc[g.index] == "night"]
+                row["bedroom_night_mean_f"] = v.mean() if v.notna().any() else np.nan
+        if "bedroom_humidity_pct" in g and g["bedroom_humidity_pct"].notna().any():
+            row["bedroom_humidity_mean"] = g["bedroom_humidity_pct"].mean()
         if n == 0:
             rows.append(row)
             continue
@@ -104,11 +116,15 @@ def weekly_table(daily: pd.DataFrame) -> pd.DataFrame:
                "degree_hours_below": g["degree_hours_below"].sum(),
                "degree_hours_above": g["degree_hours_above"].sum()}
         for c in ["outdoor_mean_f", "in_out_gap_mean_f", "daytime_rise_f", "humidity_mean",
-                  "lamp_on_h", "sun_klux_h", "sleep_h"]:
+                  "lamp_on_h", "sun_klux_h", "sleep_h", "bedroom_mean_f", "bedroom_night_mean_f",
+                  "living_minus_bedroom_f", "bedroom_humidity_mean"]:
             if c in g:
                 row[c if c != "sleep_h" else "sleep_h_mean"] = g[c].mean()
         if "outdoor_min_f" in g:
             row["outdoor_min_f"] = g["outdoor_min_f"].min()
+        if "bedroom_min_f" in g and g["bedroom_min_f"].notna().any():
+            row["bedroom_min_f"] = g["bedroom_min_f"].min()
+            row["bedroom_hours_below_comfort"] = g["bedroom_hours_below_comfort"].sum()
         if "lights_out" in g and g["lights_out"].notna().any():
             lo = pd.to_datetime(g["lights_out"].dropna())
             wk_ = pd.to_datetime(g["wake_next_morning"].dropna())
@@ -144,7 +160,8 @@ def heating_balance_outdoor(model, start_f: float, target_f: float, coast_h: flo
     return (target_f - start_f * d) / (1 - d) - model.offset_f
 
 
-def build_flags(daily, nights, coast, model, forecast, health_df, df, cfg) -> list[dict]:
+def build_flags(daily, nights, coast, model, forecast, health_df, df, cfg,
+                devices=None, calib=None) -> list[dict]:
     lo, hi = cfg["comfort_low_f"], cfg["comfort_high_f"]
     F = []
 
@@ -170,6 +187,17 @@ def build_flags(daily, nights, coast, model, forecast, health_df, df, cfg) -> li
                 if len(bad):
                     pk = g.loc[getattr(g[ext], fn)()]
                     add("warning", "comfort", f"week of {wk}: {len(bad)} day(s) {word} °F, {bad[col].sum():.1f} h "
+                        f"in total (extreme {pk[ext]:.1f} °F on {pk['date']})", wk)
+    if "bedroom_hours_below_comfort" in daily:
+        d = daily.dropna(subset=["bedroom_mean_f"]).copy()
+        d["week"] = pd.to_datetime(d["date"]).dt.to_period("W-SUN").dt.start_time.dt.date
+        for wk, g in d.groupby("week"):
+            for col, word, ext, fn in (("bedroom_hours_below_comfort", f"below {lo:g}", "bedroom_min_f", "idxmin"),
+                                       ("bedroom_hours_above_comfort", f"above {hi:g}", "bedroom_max_f", "idxmax")):
+                bad = g[g[col] > 0.25]
+                if len(bad):
+                    pk = g.loc[getattr(g[ext], fn)()]
+                    add("warning", "bedroom", f"week of {wk}: {len(bad)} day(s) {word} °F, {bad[col].sum():.1f} h "
                         f"in total (extreme {pk[ext]:.1f} °F on {pk['date']})", wk)
     full = daily[~daily["partial_day"] & daily["indoor_mean_f"].notna()] if "indoor_mean_f" in daily else daily.iloc[:0]
     if len(full) and full["hours_below_comfort"].sum() + full["hours_above_comfort"].sum() < 0.25:
@@ -233,16 +261,27 @@ def build_flags(daily, nights, coast, model, forecast, health_df, df, cfg) -> li
             f"direct sun reaches the sensor on {len(days)} of {len(set(df.index.date))} days, around "
             f"{int(hours.min()):02d}:{int(hours.min() % 1 * 60):02d}-{int(hours.max()):02d}:{int(hours.max() % 1 * 60):02d}, "
             f"reading up to {bump.max():.0f} °F above the room ({sl['indoor_raw_f'].max():.1f} °F raw). "
-            f"Those {len(sl) / 60:.1f} h are excluded from all statistics. Shade or move the sensor "
-            "(also skews the firmware's slope-based HVAC detection)")
+            f"Those {len(sl) / 60:.1f} h are excluded from all statistics. Shade or move the sensor")
 
     # Light sensor
     if {"led_lux", "sun_up"} <= set(df.columns):
         leak = df.loc[df["sun_up"], "led_lux"]
         if (leak > 1000).any():
             add("info", "sensor", f"led_lux reaches {leak.max():.0f} lux in daylight - sunlight is leaking into "
-                "the LED channel. Calibrate R_SUN / R_LED (LIGHT_CALIBRATION=1); until then daytime "
-                "lamp use cannot be separated from sun")
+                "the LED channel. Calibrate R_SUN / R_LED in the Level 2 firmware (summary.md -> Devices "
+                "suggests values from the living-status feed); until then daytime lamp use cannot be "
+                "separated from sun")
+
+    # Boards (status feeds)
+    if devices is not None and not devices.empty:
+        for _, r in devices.iterrows():
+            if r["restarts"]:
+                add("info", "device", f"{r['room']} board restarted {r['restarts']} time(s)")
+            if r["rssi_median_dbm"] < -80:
+                add("warning", "device", f"{r['room']} board WiFi is weak (median {r['rssi_median_dbm']:.0f} dBm)")
+    for k, v in (calib or {}).items():
+        if v.get("median") is not None:
+            add("info", "sensor", f"suggested {k} = {v['median']:.3f} (median ir/full of {v['n']} status samples)")
 
     # Data health
     for _, r in daily[daily["partial_day"]].iterrows():

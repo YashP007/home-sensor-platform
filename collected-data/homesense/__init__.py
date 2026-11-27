@@ -8,5 +8,6 @@ Modules:
     metrics   daily / weekly tables, data health, auto-flags
     plots     static PNG dashboards + plotly explorer
     report    CSV + summary.md + summary.json writers
+    devices   board health + light-split calibration from the status feeds
     pipeline  wires it together for analyze.py / analyze_legacy.py
 """

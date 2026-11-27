@@ -35,7 +35,12 @@ COLUMN_DOCS = {
     "wake_next_morning / wake": "end of that dark run: first lamp on (wake_source=lamp) or sunrise (wake_source=daylight)",
     "sleep_h": "length of the overnight dark run, hours (living-room proxy for sleep)",
     "bedtime_confidence": "low = room was already dark from dusk (no lamp switched off), so the start is not a bedtime",
-    "partial_day": "True when coverage < 90 %",
+    "bedroom_mean_f / _min_f / _max_f": "bedroom temperature stats, °F (Level 2 peripheral board)",
+    "bedroom_night_mean_f": "mean bedroom °F in the night period",
+    "bedroom_hours_below_comfort / _above_comfort": "bedroom hours outside the comfort band",
+    "living_minus_bedroom_f": "mean living-room − bedroom °F (positive = bedroom cooler)",
+    "bedroom_humidity_mean": "mean bedroom %RH",
+    "partial_day": "True when coverage < 90 % (coverage is of the living-room feed)",
     # nights.csv
     "night_of": "the evening date the night starts on",
     "sleep_interruptions": "lamp-on blips inside the dark run",
@@ -57,6 +62,10 @@ COLUMN_DOCS = {
     "required_start_f": "indoor °F needed at start_hour; empty = target is met without any heat",
     # hourly_timeseries.csv
     "ts": "local hour start",
+    "indoor_f": "living-room temperature (the original home-temperature feed)",
+    # device_status.csv
+    "room / up / rssi / heap": "board, seconds since boot, WiFi dBm, free heap bytes (from the status feeds)",
+    "full / ir / gain / lux / ir_ratio": "raw TSL2591 counts, gain multiplier, total lux, ir/full (living room)",
     "state_mode": "most common activity state in the hour",
 }
 
@@ -96,7 +105,8 @@ def to_csv(df: pd.DataFrame, path: str):
 
 
 def hourly_table(df: pd.DataFrame) -> pd.DataFrame:
-    num = [c for c in ("indoor_f", "outdoor_f", "led_lux", "sun_lux", "humidity_pct", "pressure_hpa") if c in df]
+    num = [c for c in ("indoor_f", "bedroom_f", "outdoor_f", "led_lux", "sun_lux", "humidity_pct",
+                       "bedroom_humidity_pct", "pressure_hpa") if c in df]
     h = df[num].resample("1h").mean()
     h["indoor_min_f"] = df["indoor_f"].resample("1h").min()
     h["indoor_max_f"] = df["indoor_f"].resample("1h").max()
@@ -120,8 +130,8 @@ def write_summary(outdir: str, ctx: dict):
     head = {
         "range": f"{t0:%Y-%m-%d %H:%M} → {t1:%Y-%m-%d %H:%M} ({cfg['timezone']})",
         "days_with_data": int(len(full)),
-        "feeds": sorted(c for c in ("indoor_f", "outdoor_f", "led_lux", "sun_lux", "humidity_pct",
-                                    "pressure_hpa") if c in df),
+        "feeds": sorted(c for c in ("indoor_f", "bedroom_f", "outdoor_f", "led_lux", "sun_lux", "humidity_pct",
+                                    "bedroom_humidity_pct", "pressure_hpa") if c in df),
         "indoor_mean_f": float(df["indoor_f"].mean()),
         "indoor_min_f": float(df["indoor_f"].min()), "indoor_min_at": f"{df['indoor_f'].idxmin():%Y-%m-%d %H:%M}",
         "indoor_max_f": float(df["indoor_f"].max()), "indoor_max_at": f"{df['indoor_f'].idxmax():%Y-%m-%d %H:%M}",
@@ -131,6 +141,10 @@ def write_summary(outdir: str, ctx: dict):
     if "outdoor_f" in df:
         head["outdoor_mean_f"] = float(df["outdoor_f"].mean())
         head["outdoor_min_f"] = float(df["outdoor_f"].min())
+    if "bedroom_f" in df and df["bedroom_f"].notna().any():
+        head["bedroom_mean_f"] = float(df["bedroom_f"].mean())
+        head["bedroom_min_f"] = float(df["bedroom_f"].min())
+        head["living_minus_bedroom_f"] = float((df["indoor_f"] - df["bedroom_f"]).mean())
     if nights is not None and not nights.empty and "sleep_h" in nights:
         head["mean_dark_window_h"] = float(nights["sleep_h"].mean())
 
@@ -144,6 +158,8 @@ def write_summary(outdir: str, ctx: dict):
           "living room (not under a lamp) logs indoor temperature every 30 s"
           + (", plus a TSL2591 light sensor split into a lamp/LED channel and a sun channel, and outdoor "
              "temperature (Open-Meteo, 15 min)." if ctx["mode"] == "current" else "."),
+          *(["- A second board (BME280 only) in the bedroom logs bedroom temperature and humidity "
+              "every 30 s; `indoor_f` is the living room."] if "bedroom_mean_f" in head else []),
           "- The occupant controls the thermostat. In autumn the apartment warms up enough during the day that "
           "heating has not been needed overnight; the occupant is interested in heating while away so the "
           "apartment's thermal mass carries it through the night.",
@@ -163,6 +179,9 @@ def write_summary(outdir: str, ctx: dict):
     if "daytime_rise_f" in full and full["daytime_rise_f"].notna().any():
         L.append(f"- Typical daytime warm-up (10:00 → afternoon peak): **{full['daytime_rise_f'].median():+.1f} °F** "
                  f"(median; range {full['daytime_rise_f'].min():+.1f} to {full['daytime_rise_f'].max():+.1f}).")
+    if "bedroom_mean_f" in head:
+        L.append(f"- Bedroom averaged **{head['bedroom_mean_f']:.1f} °F** (low {head['bedroom_min_f']:.1f}), "
+                 f"living room − bedroom {head['living_minus_bedroom_f']:+.1f} °F on average.")
     if model is not None:
         L.append(f"- Thermal time constant **τ ≈ {model.tau_h:.0f} h** (90 % CI {model.tau_h_ci[0]:.0f}-"
                  f"{model.tau_h_ci[1]:.0f} h). With no heat and no sun the apartment settles "
@@ -180,8 +199,9 @@ def write_summary(outdir: str, ctx: dict):
               "`dT/dt = K_COUPLE·(T_out − T) + K_SOLAR·log10(1 + sun_lux) + K_BIAS`, fitted on passive "
               f"(|dT/dt| ≤ {cfg['fit_max_abs_slope']} °F/min) samples with a robust loss. "
               f"R² {model.r2:.2f}, residual RMS {model.rmse * 60:.2f} °F/h, {model.n} samples over {model.days} days.", "",
-              "Firmware-ready (Level 2b `level2b_context_aware_inference.ino`):", "", "```cpp",
-              model.firmware_snippet(), "```", ""]
+              f"- K_COUPLE = {model.k_couple:.6f} /min (τ = {model.tau_h:.1f} h)",
+              f"- K_SOLAR = {model.k_solar if model.uses_solar else 0:.6f} °F/min per log10(1 + sun_lux)",
+              f"- K_BIAS = {model.k_bias:.6f} °F/min", ""]
         for n in model.notes:
             L.append(f"- Note: {n}")
         L.append("")
@@ -209,21 +229,33 @@ def write_summary(outdir: str, ctx: dict):
         L += ["## Nights", "", md_table(nights, ["night_of", "lights_out", "wake", "sleep_h", "bedtime_confidence",
                                                  "evening_lamp_h", "start_f", "end_f", "drop_f", "outdoor_mean_f",
                                                  "pred_err_f", "note"], max_rows=21), ""]
+    devices, calib = ctx.get("devices"), ctx.get("calib") or {}
+    if devices is not None and not devices.empty:
+        L += ["## Devices", "", md_table(devices), ""]
+        for k, v in calib.items():
+            L.append(f"- Suggested `{k}`: " + (f"**{v['median']:.3f}** (IQR {v['iqr'][0]:.3f}-{v['iqr'][1]:.3f}, "
+                                                f"{v['n']} samples)" if v["median"] is not None
+                                                else f"not enough samples yet ({v['n']})"))
+        if calib:
+            L += ["", "Paste these into `firmware/level2_room_sensor/level2_room_sensor.ino` and re-flash "
+                  "the main board.", ""]
     L += ["## Weekly", "", md_table(weekly), ""]
     L += ["## Daily" + (" (last 21 days; full table in data/daily_summary.csv)" if len(daily) > 21 else ""), "",
           md_table(daily, ["date", "weekday", "coverage_pct", "indoor_mean_f", "indoor_min_f", "indoor_max_f",
-                           "comfort_pct", "daytime_rise_f", "outdoor_mean_f", "in_out_gap_mean_f",
+                           "comfort_pct", "daytime_rise_f", "bedroom_mean_f", "living_minus_bedroom_f",
+                           "outdoor_mean_f", "in_out_gap_mean_f",
                            "sun_klux_h", "lamp_on_h", "sleep_h"], max_rows=21), ""]
     L += ["## Data health", "", md_table(ctx["health"]), ""]
     L += ["## Files", ""] + [f"- `{f}`" for f in ctx["files"]] + [""]
     L += ["## Column dictionary", "", "| column | meaning |", "|---|---|"]
     L += [f"| {k} | {v} |" for k, v in COLUMN_DOCS.items()] + [""]
     L += ["## Method caveats", "",
-          "- Lux split: the firmware's R_SUN/R_LED are uncalibrated placeholders, so daytime sunlight leaks into "
-          "the lamp channel. Lamp use is therefore only judged while the sun is down.",
+          "- Lux split: until R_SUN/R_LED are calibrated (see Devices), daytime sunlight leaks into the lamp "
+          "channel. Lamp use is therefore only judged while the sun is down.",
           "- The thermal model is single-time-constant. Right after a warm afternoon the air cools faster than "
           "the model (fast air mode vs slow thermal mass); see pred_err_f in nights.csv.",
-          "- The HVAC state feed is not used (the firmware's heat-state inference is not working).",
+          "- The firmware does not infer HVAC state (removed in Level 2); overnight heating is only inferred "
+          "from indoor warming (heat_suspected in nights.csv).",
           *(["- No light sensor in this period, so direct sun on the sensor cannot be detected. In October "
              "(multi-feed data) the sun reaches the sensor ~12:45-15:15 and reads up to ~19 °F high; afternoon "
              "peaks here may be partly sensor heating rather than room air."] if ctx["mode"] == "legacy" else []),
@@ -240,6 +272,8 @@ def write_summary(outdir: str, ctx: dict):
                                "k_bias_f_per_min": model.k_bias, "tau_h": model.tau_h,
                                "tau_h_ci90": list(model.tau_h_ci), "offset_f": model.offset_f,
                                "r2": model.r2, "days": model.days, "notes": model.notes}
+    if calib:
+        js["light_calibration"] = calib
     if forecast:
         js["tonight"] = {k: (str(v) if isinstance(v, pd.Timestamp) else v) for k, v in forecast.items()}
         js["tonight"]["required_start_f"] = {str(k): v for k, v in forecast["required_start_f"].items()}

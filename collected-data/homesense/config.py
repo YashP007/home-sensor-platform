@@ -27,6 +27,8 @@ DEFAULTS = {
     # Cleaning
     "valid_range": {                  # samples outside these are dropped as sensor faults
         "indoor_f": [40, 100],
+        "bedroom_f": [40, 100],
+        "bedroom_humidity_pct": [0, 100],
         "outdoor_f": [-40, 120],
         "led_lux": [0, 120000],
         "sun_lux": [0, 120000],
@@ -34,7 +36,9 @@ DEFAULTS = {
         "pressure_hpa": [850, 1100],
     },
     "spike_window_samples": 15,       # centered rolling median for spike rejection
-    "spike_threshold": {"indoor_f": 3.0, "humidity_pct": 8.0},
+    "spike_threshold": {"indoor_f": 3.0, "bedroom_f": 3.0, "humidity_pct": 8.0, "bedroom_humidity_pct": 8.0},
+    # Level 2 firmware publishes dark as 0.01 lux (log-scale charts cannot draw 0); read it back as 0.
+    "lux_floor": 0.01,
     # After a power-up (first sample, or a gap longer than warmup_gap_min) the board is
     # still settling and reads warm; drop that stretch of indoor samples.
     "warmup_gap_min": 2.5,            # publish cadence is 30 s; a gap this long is usually a reboot
@@ -76,6 +80,14 @@ DEFAULTS = {
     # Day x time-of-day maps (plots/day_hour_maps.png, plots/indoor_outdoor_delta.png)
     "dayhour_start_hour": 3,          # each row runs from this hour to the same hour next day
     "dayhour_bin_min": 15,            # column width
+
+    # Light-split calibration from the living-room status feed (raw TSL2591 counts)
+    "calib_sun_min_lux": 1000,        # strong daylight: sun dominates any lamp
+    "calib_sun_min_elev_deg": 20,
+    "calib_led_max_elev_deg": -6,     # after dusk every lux is artificial
+    "calib_led_min_lux": 2,
+    "calib_min_counts": 200,          # below this the ir/full ratio is noise (matches firmware)
+    "calib_min_samples": 10,
 
     # Outdoor backfill (Open-Meteo, no key)
     "weather_backfill": True,

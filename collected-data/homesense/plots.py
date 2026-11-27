@@ -1,7 +1,7 @@
 """Static PNG figures (matplotlib) and the zoomable plotly explorer.
 
 Colour roles are fixed across every figure so a reader learns them once:
-indoor = blue, outdoor = orange, LED/lamp light = violet, sunlight = yellow.
+indoor (living room) = blue, bedroom = magenta, outdoor = orange, LED/lamp light = violet, sunlight = yellow.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from .util import local_time, runs
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#898781"
 GRID, AXIS, SURFACE = "#e1e0d9", "#c3c2b7", "#fcfcfb"
 INDOOR, OUTDOOR, LED, SUN = "#2a78d6", "#eb6834", "#6250d6", "#eda100"
-HUMID, PRESS = "#1baf7a", "#e87ba4"
+HUMID, PRESS, BEDROOM = "#1baf7a", "#e87ba4", "#b5338a"
 COMFORT_FILL, NIGHT_FILL = "#ebe9e1", "#dde5f0"
 COLD, NEUTRAL, HOT = "#1c5cab", "#d6d4cb", "#e34948"
 STATE_COLORS = {"daylight": "#fbe6a6", "lights on": LED, "dark (awake/away)": AXIS,
@@ -125,9 +125,10 @@ def plot_dashboard(df: pd.DataFrame, cfg: dict, t0, t1, title: str, subtitle: st
         panels.append("light")
     if "state" in w and (w["state"] != "no data").any():
         panels.append("state")
-    for c in ("humidity_pct", "pressure_hpa"):
-        if c in w and w[c].notna().any():
-            panels.append(c)
+    if any(c in w and w[c].notna().any() for c in ("humidity_pct", "bedroom_humidity_pct")):
+        panels.append("humidity_pct")
+    if "pressure_hpa" in w and w["pressure_hpa"].notna().any():
+        panels.append("pressure_hpa")
     hr = {"temp": 3.4, "light": 1.7, "state": 0.32, "humidity_pct": 1.2, "pressure_hpa": 1.0}
     fig, axes = plt.subplots(len(panels), 1, figsize=(15, 1.4 + sum(hr[p] for p in panels)),
                              sharex=True, gridspec_kw={"height_ratios": [hr[p] for p in panels]},
@@ -148,7 +149,11 @@ def plot_dashboard(df: pd.DataFrame, cfg: dict, t0, t1, title: str, subtitle: st
                                label="sun on sensor (excluded)" if k == 0 else None)
                 ax.plot(idx, w["indoor_raw_f"].where(w["sensor_sunlit"]), color=INDOOR, lw=1.1,
                         ls=(0, (1.5, 1.5)), zorder=4, label="indoor raw (sunlit sensor)")
-            ax.plot(w.index, w["indoor_f"], color=INDOOR, lw=1.7, label="indoor", zorder=4)
+            has_bed = "bedroom_f" in w and w["bedroom_f"].notna().any()
+            if has_bed:
+                ax.plot(w.index, w["bedroom_f"], color=BEDROOM, lw=1.4, label="bedroom", zorder=4)
+            ax.plot(w.index, w["indoor_f"], color=INDOOR, lw=1.7, label="living room" if has_bed else "indoor",
+                    zorder=4)
             # selective direct labels: each day's indoor high and low
             for day, g in w["indoor_f"].groupby(w.index.date):
                 if g.notna().sum() < 120:
@@ -160,8 +165,10 @@ def plot_dashboard(df: pd.DataFrame, cfg: dict, t0, t1, title: str, subtitle: st
             ax.set_ylabel("°F")
             ax.legend(loc="lower left", ncol=6, bbox_to_anchor=(0, 1.0))
             raw = w.get("indoor_raw_f", w["indoor_f"])
-            lo = np.nanmin([raw.min(), w.get("outdoor_f", raw).min(), cfg["comfort_low_f"]])
-            hi = np.nanmax([raw.max(), w.get("outdoor_f", raw).max(), cfg["comfort_high_f"]])
+            lo = np.nanmin([raw.min(), w.get("outdoor_f", raw).min(), w.get("bedroom_f", raw).min(),
+                            cfg["comfort_low_f"]])
+            hi = np.nanmax([raw.max(), w.get("outdoor_f", raw).max(), w.get("bedroom_f", raw).max(),
+                            cfg["comfort_high_f"]])
             ax.set_ylim(lo - 3, hi + 3)
         elif p == "light":
             for col, c, lab in (("led_lux", LED, "lamp / LED channel"), ("sun_lux", SUN, "sun channel")):
@@ -178,8 +185,12 @@ def plot_dashboard(df: pd.DataFrame, cfg: dict, t0, t1, title: str, subtitle: st
         elif p == "state":
             _state_strip(ax, w)
         elif p == "humidity_pct":
-            ax.plot(w.index, w[p], color=HUMID, lw=1.3)
+            for col, c, lab in (("humidity_pct", HUMID, "living room"), ("bedroom_humidity_pct", BEDROOM, "bedroom")):
+                if col in w and w[col].notna().any():
+                    ax.plot(w.index, w[col], color=c, lw=1.3, label=lab)
             ax.axhspan(30, 50, color=COMFORT_FILL, alpha=0.7, lw=0, zorder=0)
+            if "bedroom_humidity_pct" in w and w["bedroom_humidity_pct"].notna().any():
+                ax.legend(loc="upper left", ncol=2)
             ax.set_ylabel("%RH")
         elif p == "pressure_hpa":
             ax.plot(w.index, w[p], color=PRESS, lw=1.3)
@@ -740,7 +751,10 @@ def write_explorer(df: pd.DataFrame, nights: pd.DataFrame, cfg: dict, path: str,
     rows = [("temp", "°F")]
     if "led_lux" in r or "sun_lux" in r:
         rows.append(("light", "lux"))
-    rows += [(c, u) for c, u in (("humidity_pct", "%RH"), ("pressure_hpa", "hPa")) if c in r and r[c].notna().any()]
+    if any(c in r and r[c].notna().any() for c in ("humidity_pct", "bedroom_humidity_pct")):
+        rows.append(("humidity", "%RH"))
+    if "pressure_hpa" in r and r["pressure_hpa"].notna().any():
+        rows.append(("pressure_hpa", "hPa"))
     fig = make_subplots(rows=len(rows), cols=1, shared_xaxes=True, vertical_spacing=0.03,
                         row_heights=[3] + [1.4] * (len(rows) - 1))
     for i, (name, unit) in enumerate(rows, 1):
@@ -749,16 +763,23 @@ def write_explorer(df: pd.DataFrame, nights: pd.DataFrame, cfg: dict, path: str,
                           line_width=0, row=i, col=1)
             if "outdoor_f" in r:
                 fig.add_trace(go.Scattergl(x=r.index, y=r["outdoor_f"], name="outdoor", line=dict(color=OUTDOOR, width=1.4)), i, 1)
-            fig.add_trace(go.Scattergl(x=r.index, y=r["indoor_f"], name="indoor", line=dict(color=INDOOR, width=1.6)), i, 1)
+            if "bedroom_f" in r:
+                fig.add_trace(go.Scattergl(x=r.index, y=r["bedroom_f"], name="bedroom",
+                                           line=dict(color=BEDROOM, width=1.4)), i, 1)
+            fig.add_trace(go.Scattergl(x=r.index, y=r["indoor_f"], name="living room",
+                                       line=dict(color=INDOOR, width=1.6)), i, 1)
         elif name == "light":
             for col, c, lab in (("led_lux", LED, "lamp / LED lux"), ("sun_lux", SUN, "sun lux")):
                 if col in r:
                     fig.add_trace(go.Scattergl(x=r.index, y=r[col].clip(lower=0.3), name=lab,
                                                line=dict(color=c, width=1.2)), i, 1)
             fig.update_yaxes(type="log", row=i, col=1)
+        elif name == "humidity":
+            for col, c, lab in (("humidity_pct", HUMID, "living %RH"), ("bedroom_humidity_pct", BEDROOM, "bedroom %RH")):
+                if col in r:
+                    fig.add_trace(go.Scattergl(x=r.index, y=r[col], name=lab, line=dict(color=c, width=1.2)), i, 1)
         else:
-            fig.add_trace(go.Scattergl(x=r.index, y=r[name], name=name,
-                                       line=dict(color=HUMID if "hum" in name else PRESS, width=1.2)), i, 1)
+            fig.add_trace(go.Scattergl(x=r.index, y=r[name], name=name, line=dict(color=PRESS, width=1.2)), i, 1)
         fig.update_yaxes(title_text=unit, row=i, col=1, gridcolor=GRID)
     if not nights.empty and "lights_out" in nights:
         for _, n in nights.dropna(subset=["lights_out"]).iterrows():

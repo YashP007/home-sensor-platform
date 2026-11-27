@@ -1,6 +1,6 @@
 """Passive thermal model of the apartment and what it implies overnight.
 
-Model (identical to the Level 2b firmware's passiveDriftFPerMin):
+Model:
 
     dT/dt = K_COUPLE*(T_out - T) + K_SOLAR*log10(1 + sun_lux) + K_BIAS      [°F/min]
 
@@ -60,12 +60,6 @@ class DriftModel:
             target = t_out[k] + (self.k_bias + sun_term[k]) / self.k_couple
             T[k + 1] = target + (T[k] - target) * a
         return T[1:]
-
-    def firmware_snippet(self) -> str:
-        return (f"constexpr float K_COUPLE = {self.k_couple:.6f}f;   // 1/min  (tau = {self.tau_h:.1f} h)\n"
-                f"constexpr float K_SOLAR  = {self.k_solar if self.uses_solar else 0:.6f}f;   "
-                f"// °F/min per log10(1 + sun_lux)\n"
-                f"constexpr float K_BIAS   = {self.k_bias:.6f}f;   // °F/min")
 
 
 def add_slope(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:

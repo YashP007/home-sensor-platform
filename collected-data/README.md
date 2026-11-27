@@ -36,6 +36,12 @@ Drop exports into `raw-data/` unchanged. Files are matched by name,
 | `led-lux` | `led_lux` | hold last value ≤ 10 min (published on change) |
 | `sun-lux` | `sun_lux` | hold last value ≤ 10 min |
 | `humidity`, `pressure` | `humidity_pct`, `pressure_hpa` | hold ≤ 70 min (optional) |
+| `bedroom-temperature` | `bedroom_f` | interpolate gaps ≤ 6 min (Level 2 peripheral board) |
+| `bedroom-humidity` | `bedroom_humidity_pct` | hold ≤ 70 min |
+| `living-status`, `bedroom-status` | `data/device_status.csv` | text `key=value` diagnostics, parsed per message |
+
+`indoor_f` is the living room (the original `home-temperature` feed). Lux values at the firmware's
+0.01 lux floor are read back as 0.
 
 Overlapping exports are de-duplicated by record id. Open-Meteo responses are
 cached in `raw-data/_cache/`.
@@ -60,6 +66,7 @@ data/weekly_summary.csv      one row per ISO week (Mon-Sun)
 data/nights.csv              one row per night: lights-out/wake + overnight coast + model check
 data/preheat_guide.csv       indoor °F needed at 18:00 / 22:00 to stay ≥ 65/68/70 °F at 06:00
 data/hourly_timeseries.csv   hourly means of every feed, for ad-hoc analysis
+data/device_status.csv       every status-feed message (uptime, RSSI, heap, raw TSL2591 counts)
 data/data_health.csv, data/flags.csv
 plots/weekly/week_<YYYY-Www>.png   temperature + light + activity dashboard per week
 plots/calendar_heatmap.png   day × hour indoor and outdoor temperature
@@ -75,7 +82,7 @@ explorer.html                zoomable plotly view (needs internet for the plotly
 
 ## Method
 
-**Thermal model.** This is the same equation the Level 2b firmware uses:
+**Thermal model.** A single-time-constant passive model of the living room:
 
 ```text
 dT/dt = K_COUPLE·(T_out − T) + K_SOLAR·log10(1 + sun_lux) + K_BIAS
@@ -83,7 +90,7 @@ dT/dt = K_COUPLE·(T_out − T) + K_SOLAR·log10(1 + sun_lux) + K_BIAS
 
 It is fitted on passive samples (|dT/dt| ≤ 0.08 °F/min, 31-min slope window) with
 a robust soft-L1 loss, and τ gets a day-block bootstrap CI. `summary.md` prints the
-coefficients as ready-to-paste `constexpr` lines. τ = 1/K_COUPLE is the time
+coefficients. τ = 1/K_COUPLE is the time
 constant, and K_BIAS/K_COUPLE is how far above outdoor the apartment settles with
 no heat and no sun.
 
@@ -97,6 +104,14 @@ floor. The dark run covering 03:00 is treated as the lights-out window, with lam
 blips under 10 min merged. Lamp use is only judged while the sun is down, because
 the LED/sun split is uncalibrated and sunlight leaks into `led_lux` by day. The
 sensor sits in the living room, so these times are a bedtime proxy.
+
+**Rooms.** With the bedroom feeds present, the weekly dashboards and explorer draw both
+rooms, daily/weekly tables add bedroom stats and `living_minus_bedroom_f`, and bedroom time outside
+the comfort band is flagged per week.
+
+**Devices and light calibration.** From the status feeds: restarts (uptime going backwards), WiFi
+RSSI and free heap per board. The living-room board's raw counts give suggested `R_SUN` (median
+ir/full with the sun > 20° up and ≥ 1000 lux) and `R_LED` (sun < −6°, ≥ 2 lux) for the Level 2 firmware.
 
 **Comfort band** is 65-80 °F. Days are local calendar days (America/New_York).
 

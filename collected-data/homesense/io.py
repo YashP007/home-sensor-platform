@@ -23,13 +23,18 @@ import pandas as pd
 #   "interp": sampled continuously (temperature every 30 s, outdoor every 15 min)
 #   "hold":   published on change + heartbeat, so the last value stays valid until the next one
 FEEDS = {
-    "temperature":  ("indoor_f",     "°F",   "interp", 6),
+    "temperature":  ("indoor_f",     "°F",   "interp", 6),     # living room (main board)
+    "bedroom-temperature": ("bedroom_f", "°F", "interp", 6),  # bedroom (peripheral board)
     "outdoor-temp": ("outdoor_f",    "°F",   "interp", 45),
     "led-lux":      ("led_lux",      "lux",  "hold",   10),
     "sun-lux":      ("sun_lux",      "lux",  "hold",   10),
     "humidity":     ("humidity_pct", "%RH",  "hold",   70),
+    "bedroom-humidity": ("bedroom_humidity_pct", "%RH", "hold", 70),
     "pressure":     ("pressure_hpa", "hPa",  "hold",   70),
 }
+# Text feeds of space-separated key=value diagnostics, one per board -> room name.
+STATUS_FEEDS = {"living-status": "living", "bedroom-status": "bedroom"}
+TEMP_COLS = ("indoor_f", "bedroom_f")
 FILE_RE = re.compile(r"^home-(?P<feed>[a-z0-9-]+?)-(?P<stamp>\d{8}-\d{4})\.csv$")
 
 
@@ -53,6 +58,8 @@ def discover(raw_dir: str) -> dict[str, list[str]]:
         m = FILE_RE.match(os.path.basename(path))
         if not m:
             continue
+        if m["feed"] in STATUS_FEEDS:
+            continue                                    # parsed by load_status()
         if m["feed"] not in FEEDS:
             print(f"[load] ignoring unknown feed '{m['feed']}' ({os.path.basename(path)})")
             continue
@@ -84,6 +91,8 @@ def load_feeds(raw_dir: str, cfg: dict) -> tuple[dict[str, pd.Series], dict[str,
         s = s[s.index.notna()].dropna().sort_index()
         s = s[~s.index.duplicated(keep="first")]
 
+        if col in ("led_lux", "sun_lux"):
+            s[s <= cfg["lux_floor"] * 1.001] = 0.0
         lo, hi = cfg["valid_range"].get(col, [-np.inf, np.inf])
         bad = (s < lo) | (s > hi)
         h.out_of_range = int(bad.sum())
@@ -93,7 +102,7 @@ def load_feeds(raw_dir: str, cfg: dict) -> tuple[dict[str, pd.Series], dict[str,
             h.spikes = int(spikes.sum())
             s = s[~spikes]
 
-        if col == "indoor_f" and len(s) > 1:
+        if col in TEMP_COLS and len(s) > 1:
             gap_before = s.index.to_series().diff().fillna(pd.Timedelta(days=1))
             boots = s.index[gap_before > pd.Timedelta(minutes=cfg["warmup_gap_min"])]
             warm = np.zeros(len(s), dtype=bool)
@@ -115,6 +124,32 @@ def load_feeds(raw_dir: str, cfg: dict) -> tuple[dict[str, pd.Series], dict[str,
     if "indoor_f" not in series:
         raise SystemExit("No home-temperature-*.csv export found - nothing to analyse.")
     return series, health
+
+
+def load_status(raw_dir: str, cfg: dict) -> pd.DataFrame:
+    """Parse the per-board status text feeds into one row per message (local ts, room, keys...)."""
+    frames = []
+    for path in sorted(glob.glob(os.path.join(raw_dir, "*.csv"))):
+        m = FILE_RE.match(os.path.basename(path))
+        if not m or m["feed"] not in STATUS_FEEDS:
+            continue
+        df = pd.read_csv(path, dtype={"value": str})
+        kv = df["value"].fillna("").map(
+            lambda v: dict(p.split("=", 1) for p in v.split() if "=" in p))
+        out = pd.DataFrame(kv.tolist()).apply(pd.to_numeric, errors="coerce")
+        out.insert(0, "room", STATUS_FEEDS[m["feed"]])
+        out.insert(0, "ts", pd.to_datetime(df["created_at"], utc=True, errors="coerce").dt.tz_convert(cfg["timezone"]))
+        out["id"] = df.get("id")
+        frames.append(out)
+    if not frames:
+        return pd.DataFrame()
+    st = pd.concat(frames, ignore_index=True)
+    st = st.drop_duplicates(subset="id" if st["id"].notna().all() else ["ts", "room"]).drop(columns="id")
+    st = st.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    if {"full", "ir"} <= set(st.columns):
+        st["ir_ratio"] = np.where(st["full"] > 0, st["ir"] / st["full"], np.nan)
+    print(f"[load] status        {len(st):>7} messages from {sorted(st['room'].unique())}")
+    return st
 
 
 def _blank_long_gaps(grid_vals: pd.Series, obs_index: pd.DatetimeIndex, max_gap_min: float):
